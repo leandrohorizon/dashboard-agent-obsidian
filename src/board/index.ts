@@ -12,6 +12,7 @@ import { parseDateMap } from '../shared/dates';
 import { normalizeStatus } from '../shared/status';
 import { normalizeFeature } from '../shared/features';
 import { normalizeRepo } from '../shared/repo';
+import { parseCardRefs } from '../shared/cardRefs';
 
 export const BOARD_FOLDER = 'board';
 export const FEATURES_FOLDER = 'condensed memory/features';
@@ -68,10 +69,8 @@ async function buildCard(app: App, file: TFile, state: CardState): Promise<Board
   const prRaw = typeof frontmatter?.pr_url === 'string' ? frontmatter.pr_url.trim() : '';
   const prValid = prRaw !== '' && validHttpUrl(prRaw);
 
-  const dependencyLinks = [
-    ...extractLinks(sections['Dependências']),
-    ...extractLinks(sections['Dependentes']),
-  ];
+  const declaredDependencies = parseCardRefs(frontmatter?.depends_on);
+  const declaredDependents = parseCardRefs(frontmatter?.dependents);
 
   return {
     path: file.path,
@@ -90,7 +89,12 @@ async function buildCard(app: App, file: TFile, state: CardState): Promise<Board
     prUrl: prRaw === '' ? null : prRaw,
     prInvalid: prRaw !== '' && !prValid,
     sections,
-    outgoingLinks: [...new Set(dependencyLinks)],
+    dependencies:
+      declaredDependencies.length > 0
+        ? declaredDependencies
+        : extractLinks(sections['Dependências']),
+    dependents:
+      declaredDependents.length > 0 ? declaredDependents : extractLinks(sections['Dependentes']),
   };
 }
 
@@ -139,8 +143,11 @@ export function cardByPath(scan: BoardScan, path: string): BoardCard | undefined
 
 export function dependentsOf(scan: BoardScan, card: BoardCard): BoardCard[] {
   const key = card.basename.toLowerCase();
+  const declared = new Set(card.dependents.map((name) => name.toLowerCase()));
+
   return scan.cards.filter((candidate) => {
     if (candidate.path === card.path) return false;
-    return candidate.outgoingLinks.some((link) => link.toLowerCase() === key);
+    if (declared.has(candidate.basename.toLowerCase())) return true;
+    return candidate.dependencies.some((name) => name.toLowerCase() === key);
   });
 }

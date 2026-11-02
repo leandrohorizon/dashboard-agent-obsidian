@@ -44,7 +44,8 @@ export interface BoardCard {
   prUrl: string | null;
   prInvalid: boolean;
   sections: SectionMap;
-  outgoingLinks: string[];
+  dependencies: string[];
+  dependents: string[];
 }
 
 export interface CardRef {

@@ -708,11 +708,12 @@ export class DashboardView extends ItemView {
     if (context === null) return;
 
     parent.createEl('h4', { text: 'Dependências e dependentes' });
-    const list = parent.createEl('ul', { cls: 'aob-links' });
 
-    for (const link of card.outgoingLinks) {
+    const dependencies = parent.createEl('ul', { cls: 'aob-links' });
+    dependencies.createEl('li', { cls: 'aob-links-header', text: 'depende de:' });
+    for (const link of card.dependencies) {
       const resolution = classifyLink(link, context);
-      const item = list.createEl('li');
+      const item = dependencies.createEl('li');
       item.createSpan({ cls: 'aob-link-name', text: link });
       item.createSpan({ cls: `aob-badge is-${resolution.kind}`, text: describeLinkKind(resolution.kind) });
       if (resolution.kind === 'card' || resolution.kind === 'ambiguous') {
@@ -721,20 +722,24 @@ export class DashboardView extends ItemView {
         }
       }
     }
+    if (card.dependencies.length === 0) {
+      dependencies.createEl('li', { cls: 'aob-hint', text: 'nenhuma' });
+    }
 
     const dependents = dependentsOf(this.scan as BoardScan, card);
-    if (dependents.length > 0) {
-      const header = list.createEl('li', { cls: 'aob-links-header', text: 'dependem deste:' });
-      header.setAttribute('aria-label', 'dependentes');
-      for (const dependent of dependents) {
-        const item = list.createEl('li');
-        item.createSpan({ cls: 'aob-link-name', text: dependent.basename });
-        item.createSpan({ cls: 'aob-badge', text: dependent.state });
-        item.addEventListener('click', () => {
-          this.selectedPath = dependent.path;
-          this.render();
-        });
-      }
+    const dependentsList = parent.createEl('ul', { cls: 'aob-links' });
+    dependentsList.createEl('li', { cls: 'aob-links-header', text: 'dependem deste:' });
+    for (const dependent of dependents) {
+      const item = dependentsList.createEl('li');
+      item.createSpan({ cls: 'aob-link-name', text: dependent.basename });
+      item.createSpan({ cls: 'aob-badge', text: dependent.state });
+      item.addEventListener('click', () => {
+        this.selectedPath = dependent.path;
+        this.render();
+      });
+    }
+    if (dependents.length === 0) {
+      dependentsList.createEl('li', { cls: 'aob-hint', text: 'nenhum' });
     }
   }
 

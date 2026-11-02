@@ -22,6 +22,7 @@ import {
   resolveProjectKey,
 } from '../src/shared/paths';
 import { discoverProjects, type FsProbe } from '../src/projects/registry';
+import { parseCardRefs } from '../src/shared/cardRefs';
 import * as nodeFs from 'fs';
 import * as nodeOs from 'os';
 import {
@@ -236,6 +237,16 @@ check(
   ),
 );
 
+equal('propriedade depends_on com wikilink', parseCardRefs('[[card-a]]'), ['card-a']);
+equal('propriedade depends_on em lista', parseCardRefs(['[[card-a]]', '[[card-b]]']), ['card-a', 'card-b']);
+equal('propriedade com alias', parseCardRefs('[[card-a|apelido]]'), ['card-a']);
+equal('propriedade sem wikilink', parseCardRefs('card-a'), ['card-a']);
+equal('propriedade vazia', parseCardRefs(''), []);
+equal('propriedade nula', parseCardRefs(null), []);
+equal('propriedade com separador por vírgula', parseCardRefs('card-a, card-b'), ['card-a', 'card-b']);
+equal('propriedade deduplica', parseCardRefs(['[[a]]', 'a']), ['a']);
+equal('propriedade ignora entradas vazias', parseCardRefs(['', null, 'b']), ['b']);
+
 const prActions = validateActions([
   { id: 'work-on-card', label: 'trabalhar', states: ['2.in_progress'], text: 'a' },
   { id: 'copy-pr', label: 'PR', states: ['2.in_progress'], onlyWithPr: true, text: 'b' },
@@ -408,7 +419,8 @@ const baseCard: BoardCard = {
   prUrl: null,
   prInvalid: false,
   sections: { 'Descrição': 'texto', 'Tarefas': '- [ ] a' },
-  outgoingLinks: [],
+  dependencies: [],
+  dependents: [],
 };
 
 const cardIssues = validateCard(baseCard);
