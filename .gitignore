@@ -1,0 +1,6 @@
+node_modules/
+test/.build/
+
+# O bundle é gerado por `npm run build` e vai para as releases, não para o git.
+main.js
+main.js.map

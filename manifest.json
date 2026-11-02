@@ -1,0 +1,9 @@
+{
+  "id": "dashboard-agent-obsidian",
+  "name": "Agent Obsidian Dashboard",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "Dashboard do fluxo de cards do Agent Obsidian: Kanban por pasta, lista com filtros, painel de current_card por projeto e acoes de copiar comando.",
+  "author": "leandrohorizon",
+  "isDesktopOnly": true
+}
