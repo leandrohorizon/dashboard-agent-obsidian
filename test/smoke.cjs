@@ -331,7 +331,6 @@ const vault = {
     return [
       '---',
       'status: In Progress',
-      'pr_title: "Título do PR de teste"',
       'pr_url: https://github.com/org/repo/pull/1',
       '---',
       '',
@@ -617,7 +616,6 @@ async function main() {
     [
       '---',
       'status: In Progress',
-      'pr_title: "Título do PR de teste"',
       'pr_url: https://github.com/org/repo/pull/1',
       '---',
       '',
@@ -654,9 +652,9 @@ async function main() {
       createdPrButton.click();
       await new Promise((resolve) => window.setTimeout(resolve, 10));
       equal(
-        'usa o pr_title do frontmatter, não o repo',
+        'usa o nome do card como título do PR',
         clipboard[clipboard.length - 1],
-        'Título do PR de teste -> https://github.com/org/repo/pull/1',
+        'card de teste do harness -> https://github.com/org/repo/pull/1',
       );
     }
   }

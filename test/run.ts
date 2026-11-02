@@ -406,7 +406,6 @@ const baseCard: BoardCard = {
   doneTasks: 0,
   totalTasks: 1,
   prUrl: null,
-  prTitle: null,
   prInvalid: false,
   sections: { 'Descrição': 'texto', 'Tarefas': '- [ ] a' },
   outgoingLinks: [],

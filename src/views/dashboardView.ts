@@ -754,7 +754,7 @@ export class DashboardView extends ItemView {
         path: this.absoluteVaultPath(card.path),
         link: this.obsidianLink(card.path),
         wikilink: `[[${card.basename}]]`,
-        pr: card.prTitle ?? card.basename,
+        pr: card.basename,
         pr_url: hasPr ? (card.prUrl ?? '') : '',
         project: card.repo ?? '',
         feature: card.feature ?? '',

@@ -67,7 +67,6 @@ async function buildCard(app: App, file: TFile, state: CardState): Promise<Board
 
   const prRaw = typeof frontmatter?.pr_url === 'string' ? frontmatter.pr_url.trim() : '';
   const prValid = prRaw !== '' && validHttpUrl(prRaw);
-  const prTitleRaw = typeof frontmatter?.pr_title === 'string' ? frontmatter.pr_title.trim() : '';
 
   const dependencyLinks = [
     ...extractLinks(sections['Dependências']),
@@ -89,7 +88,6 @@ async function buildCard(app: App, file: TFile, state: CardState): Promise<Board
     doneTasks: tasks.done,
     totalTasks: tasks.total,
     prUrl: prRaw === '' ? null : prRaw,
-    prTitle: prTitleRaw === '' ? null : prTitleRaw,
     prInvalid: prRaw !== '' && !prValid,
     sections,
     outgoingLinks: [...new Set(dependencyLinks)],

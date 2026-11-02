@@ -42,7 +42,6 @@ export interface BoardCard {
   doneTasks: number;
   totalTasks: number;
   prUrl: string | null;
-  prTitle: string | null;
   prInvalid: boolean;
   sections: SectionMap;
   outgoingLinks: string[];

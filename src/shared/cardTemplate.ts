@@ -44,7 +44,6 @@ export function fillCardTemplate(template: string, values: CardTemplateValues): 
     'reviewed:',
     'completed:',
     'pr_url:',
-    'pr_title:',
     '---',
   ].join('\n');
 
