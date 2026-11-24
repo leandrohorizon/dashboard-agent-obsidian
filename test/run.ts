@@ -4,7 +4,7 @@ import { countTasks, extractLinks, extractSection, isEmptySection } from '../src
 import { parseDateValue, parseDateMap, sortWithEmptyLast } from '../src/shared/dates';
 import { validateCard } from '../src/shared/validation';
 import { DATE_FIELDS, type BoardCard } from '../src/shared/types';
-import { fillCardTemplate, sanitizeCardName } from '../src/shared/cardTemplate';
+import { fillCardTemplate, sanitizeCardName, templatePathForWorkType } from '../src/shared/cardTemplate';
 import { isDivergent, normalizeStatus } from '../src/shared/status';
 import { normalizeRepo } from '../src/shared/repo';
 import { normalizeFeature } from '../src/shared/features';
@@ -22,11 +22,14 @@ import {
   resolveProjectKey,
 } from '../src/shared/paths';
 import { discoverProjects, type FsProbe } from '../src/projects/registry';
+import { readRepoSlug } from '../src/projects/remotes';
 import { parseCardRefs } from '../src/shared/cardRefs';
 import * as nodeFs from 'fs';
 import * as nodeOs from 'os';
 import {
+  activateCurrentCard,
   clearCurrentCard,
+  initializeStateFile,
   readState,
   repairStateFile,
   writeWithConcurrencyCheck,
@@ -457,9 +460,17 @@ equal('nome de card vazio', sanitizeCardName('   '), '');
 const templateText = [
   '---',
   'repo:',
+  'branch:',
+  'work_type: implementation',
   'status:',
   '  - Not Started',
   'feature:',
+  'created:',
+  'started:',
+  'reviewed:',
+  'completed:',
+  'depends_on:',
+  'dependents:',
   '---',
   '',
   '### Descrição',
@@ -472,12 +483,47 @@ const filled = fillCardTemplate(templateText, {
   feature: 'dashboard-obsidian',
   created: '2026-10-30',
 });
-check('frontmatter preenchido tem status', filled.includes('status: In Progress'));
-check('frontmatter preenchido tem feature', filled.includes('feature: dashboard-obsidian'));
-check('frontmatter preenchido tem created', filled.includes('created: 2026-10-30'));
-check('lista de status do template foi substituída', !filled.includes('- Not Started'));
-check('corpo do template preservado', filled.includes('### Descrição'));
+const filledFrontmatter = /^---\n([\s\S]*?)\n---/.exec(filled)?.[1] ?? '';
+const filledKeys = filledFrontmatter
+  .split('\n')
+  .map((line) => /^([A-Za-z_][A-Za-z0-9_]*):/.exec(line)?.[1])
+  .filter((key): key is string => key !== undefined);
+
+check('status vira lista com o valor da pasta', filledFrontmatter.includes('status:\n  - In Progress'));
+check('feature preenchida', filledFrontmatter.includes('feature: dashboard-obsidian'));
+check('created preenchido', filledFrontmatter.includes('created: 2026-10-30'));
 check('frontmatter começa com repo vazio', filled.startsWith('---\nrepo: \n'), filled.slice(0, 20));
+check('work_type vem do template', filledFrontmatter.includes('work_type: implementation'));
+check('depends_on do template preservado', filledFrontmatter.includes('depends_on:'));
+check('dependents do template preservado', filledFrontmatter.includes('dependents:'));
+check('nenhuma chave criada no frontmatter', !filledFrontmatter.includes('pr_url'));
+equal('ordem das chaves do template preservada', filledKeys, [
+  'repo',
+  'branch',
+  'work_type',
+  'status',
+  'feature',
+  'created',
+  'started',
+  'reviewed',
+  'completed',
+  'depends_on',
+  'dependents',
+]);
+check('corpo do template preservado', filled.includes('### Descrição') && filled.includes('texto'));
+equal('template sem frontmatter volta intacto', fillCardTemplate('# só corpo', {
+  repo: '',
+  branch: '',
+  status: 'Not Started',
+  feature: '',
+  created: '2026-10-30',
+}), '# só corpo');
+equal('caminho do template por tipo', templatePathForWorkType('epic'), 'templates/card/epic.md');
+equal(
+  'caminho do template de investigação',
+  templatePathForWorkType('investigation'),
+  'templates/card/investigation.md',
+);
 
 const tempDir = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'aob-state-'));const stateFile = nodePath.join(tempDir, '.agent_obsidian');
 const stateContext = { vaultPath: VAULT, projectName: 'proj' };
@@ -535,6 +581,64 @@ equal(
   'blocked',
 );
 
+nodeFs.writeFileSync(stateFile, JSON.stringify(fullState), 'utf8');
+const activateSnapshot = readState(stateFile).snapshot;
+equal(
+  'ativar current_card',
+  activateSnapshot === null
+    ? 'sem snapshot'
+    : activateCurrentCard(stateFile, activateSnapshot, stateContext, {
+        name: 'novo card',
+        path: 'C:/board/novo.md',
+      }).kind,
+  'ok',
+);
+const activated = JSON.parse(nodeFs.readFileSync(stateFile, 'utf8'));
+equal('card ativo gravado', activated.current_card, {
+  name: 'novo card',
+  path: 'C:/board/novo.md',
+});
+equal('ativar preserva outras chaves', activated.chave_extra, 'preservar');
+equal('ativar preserva version', activated.version, '2.0');
+
+const staleActivationSnapshot = readState(stateFile).snapshot;
+nodeFs.writeFileSync(stateFile, JSON.stringify({ ...activated, chave_extra: 'mudou' }), 'utf8');
+const staleActivation =
+  staleActivationSnapshot === null
+    ? null
+    : activateCurrentCard(stateFile, staleActivationSnapshot, stateContext, {
+        name: 'outro card',
+        path: 'C:/board/outro.md',
+      });
+check(
+  'ativar aborta quando o arquivo muda entre leitura e escrita',
+  staleActivation !== null && staleActivation.kind === 'blocked',
+  JSON.stringify(staleActivation),
+);
+equal(
+  'ativar abortado não regrava o card',
+  JSON.parse(nodeFs.readFileSync(stateFile, 'utf8')).current_card.name,
+  'novo card',
+);
+
+nodeFs.writeFileSync(stateFile, JSON.stringify({ version: '1.0' }), 'utf8');
+const repairActivationSnapshot = readState(stateFile).snapshot;
+equal(
+  'ativar grava em state que precisa de reparo sem reescrever os outros campos',
+  repairActivationSnapshot === null
+    ? 'sem snapshot'
+    : activateCurrentCard(stateFile, repairActivationSnapshot, stateContext, {
+        name: 'x',
+        path: 'C:/board/x.md',
+      }).kind,
+  'ok',
+);
+equal(
+  'ativar não repara o state',
+  JSON.parse(nodeFs.readFileSync(stateFile, 'utf8')).version,
+  '1.0',
+);
+
 nodeFs.writeFileSync(stateFile, JSON.stringify({ version: '3.0' }), 'utf8');
 equal('reparo bloqueado em versão futura', repairStateFile(stateFile, stateContext).kind, 'blocked');
 equal(
@@ -544,6 +648,79 @@ equal(
 );
 
 nodeFs.rmSync(tempDir, { recursive: true, force: true });
+
+const initDir = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'aob-init-'));
+const initFile = nodePath.join(initDir, '.agent_obsidian');
+equal(
+  'inicializa o state do projeto',
+  initializeStateFile(initFile, stateContext, {
+    name: 'card novo',
+    path: 'C:/board/card novo.md',
+  }).kind,
+  'ok',
+);
+const initialized = JSON.parse(nodeFs.readFileSync(initFile, 'utf8'));
+equal('state criado tem version 2.0', initialized.version, '2.0');
+equal('state criado aponta guidelines', initialized.guidelines_path, guidelines);
+equal('state criado aponta memória', initialized.condensed_memory_path, memoryPath);
+equal('state criado já ativa o card', initialized.current_card, {
+  name: 'card novo',
+  path: 'C:/board/card novo.md',
+});
+equal(
+  'não sobrescreve state existente',
+  initializeStateFile(initFile, stateContext, { name: 'outro card', path: 'C:/board/outro.md' }).kind,
+  'blocked',
+);
+equal(
+  'state existente fica intocado',
+  JSON.parse(nodeFs.readFileSync(initFile, 'utf8')).current_card.name,
+  'card novo',
+);
+nodeFs.rmSync(initDir, { recursive: true, force: true });
+
+const remotesDir = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'aob-remote-'));
+const projectWithGit = nodePath.join(remotesDir, 'projeto');
+nodeFs.mkdirSync(nodePath.join(projectWithGit, '.git'), { recursive: true });
+nodeFs.writeFileSync(
+  nodePath.join(projectWithGit, '.git', 'config'),
+  ['[core]', '\trepositoryformatversion = 0', '[remote "origin"]', '\turl = git@github.com:org/app.nome_estranho.git', '\tfetch = +refs/heads/*:refs/remotes/origin/*'].join('\n'),
+  'utf8',
+);
+equal('remote do projeto vira slug normalizado', readRepoSlug(projectWithGit), 'org/app.nome_estranho');
+
+const projectWithoutOrigin = nodePath.join(remotesDir, 'sem-origin');
+nodeFs.mkdirSync(nodePath.join(projectWithoutOrigin, '.git'), { recursive: true });
+nodeFs.writeFileSync(
+  nodePath.join(projectWithoutOrigin, '.git', 'config'),
+  ['[remote "upstream"]', '\turl = https://github.com/outra/repo.git'].join('\n'),
+  'utf8',
+);
+equal('remote sem origin usa o primeiro', readRepoSlug(projectWithoutOrigin), 'outra/repo');
+
+const projectWithGitFile = nodePath.join(remotesDir, 'worktree');
+const gitDirTarget = nodePath.join(remotesDir, 'gitdir-alvo');
+nodeFs.mkdirSync(projectWithGitFile, { recursive: true });
+nodeFs.mkdirSync(gitDirTarget, { recursive: true });
+nodeFs.writeFileSync(
+  nodePath.join(projectWithGitFile, '.git'),
+  `gitdir: ${gitDirTarget}\n`,
+  'utf8',
+);
+nodeFs.writeFileSync(
+  nodePath.join(gitDirTarget, 'config'),
+  ['[remote "origin"]', '\turl = git@github.com:org/worktree-repo.git'].join('\n'),
+  'utf8',
+);
+equal('worktree usa o gitdir apontado', readRepoSlug(projectWithGitFile), 'org/worktree-repo');
+
+equal(
+  'projeto sem .git não tem remote',
+  readRepoSlug(nodePath.join(remotesDir, 'inexistente')),
+  null,
+);
+
+nodeFs.rmSync(remotesDir, { recursive: true, force: true });
 
 const total = passed + failures.length;
 if (failures.length > 0) {

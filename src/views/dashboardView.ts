@@ -33,10 +33,14 @@ import {
   type BoardScan,
 } from '../board/index';
 import { discoverProjects, type FsProbe, type ProjectEntry, type RegistryResult } from '../projects/registry';
-import { expandHome, isPathInside, normalizeProjectName } from '../shared/paths';
+import { readRepoSlug } from '../projects/remotes';
+import { expandHome, isPathInside, normalizeProjectName, resolveProjectKey, toPosix } from '../shared/paths';
+import { repoLeaf } from '../shared/repo';
 import { evaluateAgentState, readCurrentCard } from '../shared/state';
 import {
+  activateCurrentCard,
   clearCurrentCard,
+  initializeStateFile,
   readState,
   repairStateFile,
   type StateSnapshot,
@@ -45,20 +49,23 @@ import { parseActionSettings, type SettingsHost } from '../settings';
 import {
   CREATABLE_STATES,
   STATUS_BY_STATE,
+  WORK_TYPES,
   fillCardTemplate,
   sanitizeCardName,
+  templatePathForWorkType,
   todayIso,
+  type WorkType,
 } from '../shared/cardTemplate';
 
 declare const require: (id: string) => unknown;
 
 export const VIEW_TYPE_DASHBOARD = 'aob-dashboard';
 
-const TEMPLATE_PATH = 'templates/card template.md';
+const TEXT_FILTER_DEBOUNCE_MS = 150;
 
 type ViewMode = 'board' | 'list' | 'projects';
 type SinceField = DateField | 'mtime';
-type SortField = DateField | 'mtime' | 'title' | 'project' | 'state' | 'pending';
+type SortField = DateField | 'mtime' | 'title' | 'project' | 'state';
 
 interface ProjectStatus {
   entry: ProjectEntry;
@@ -70,8 +77,19 @@ interface ProjectStatus {
   currentCardName: string | null;
   currentCardPath: string | null;
   targetProblem: string | null;
+  declaredVault: string | null;
   snapshot: StateSnapshot | null;
 }
+
+interface ProjectCandidate {
+  path: string;
+  name: string;
+  slug: string | null;
+}
+
+type ActivationTarget =
+  | { kind: 'existing'; status: ProjectStatus }
+  | { kind: 'bootstrap'; candidate: ProjectCandidate };
 
 const SINCE_LABELS: Record<SinceField, string> = {
   mtime: 'modificado desde',
@@ -90,7 +108,6 @@ const SORT_LABELS: Record<SortField, string> = {
   title: 'título',
   project: 'projeto',
   state: 'estado',
-  pending: 'pendentes',
 };
 
 export class DashboardView extends ItemView {
@@ -98,6 +115,8 @@ export class DashboardView extends ItemView {
   private scan: BoardScan | null = null;
   private registry: RegistryResult | null = null;
   private projectStatuses: ProjectStatus[] = [];
+  private projectRemotes = new Map<string, string | null>();
+  private projectCandidates: ProjectCandidate[] = [];
   private mode: ViewMode = 'board';
   private loading = false;
   private fatalError: string | null = null;
@@ -105,6 +124,7 @@ export class DashboardView extends ItemView {
   private selectedPath: string | null = null;
   private activeCardPaths = new Set<string>();
   private refreshHandle: number | null = null;
+  private textFilterHandle: number | null = null;
 
   private filterProject = '';
   private filterFeature = '';
@@ -112,7 +132,6 @@ export class DashboardView extends ItemView {
   private filterText = '';
   private filterSince = '';
   private filterSinceField: SinceField = 'mtime';
-  private filterPendingOnly = false;
   private sortField: SortField = 'mtime';
   private sortDirection: 'asc' | 'desc' = 'desc';
 
@@ -144,6 +163,7 @@ export class DashboardView extends ItemView {
       window.clearTimeout(this.refreshHandle);
       this.refreshHandle = null;
     }
+    this.cancelTextFilter();
   }
 
   private registerVaultEvents(): void {
@@ -188,6 +208,10 @@ export class DashboardView extends ItemView {
         },
       );
       this.projectStatuses = this.registry.projects.map((entry) => this.inspectProject(entry));
+      this.projectRemotes = new Map(
+        this.projectStatuses.map((status) => [status.entry.key, readRepoSlug(status.entry.path)]),
+      );
+      this.projectCandidates = this.buildProjectCandidates();
       this.activeCardPaths = this.collectActiveCardPaths();
       this.lastScanAt = new Date();
 
@@ -220,6 +244,7 @@ export class DashboardView extends ItemView {
         currentCardName: null,
         currentCardPath: null,
         targetProblem: null,
+        declaredVault: null,
         snapshot: null,
       };
     }
@@ -254,6 +279,7 @@ export class DashboardView extends ItemView {
       currentCardName: current.name,
       currentCardPath: current.path,
       targetProblem: target,
+      declaredVault,
       snapshot: read.snapshot,
     };
   }
@@ -268,6 +294,7 @@ export class DashboardView extends ItemView {
   }
 
   private render(): void {
+    this.cancelTextFilter();
     const root = this.contentEl;
     root.empty();
     this.renderHeader(root);
@@ -292,8 +319,9 @@ export class DashboardView extends ItemView {
 
     this.renderFilters(main);
 
-    if (this.mode === 'board') this.renderKanban(main);
-    else this.renderList(main);
+    const results = main.createDiv({ cls: 'aob-results' });
+    if (this.mode === 'board') this.renderKanban(results);
+    else this.renderList(results);
 
     if (this.selectedPath !== null) {
       const aside = body.createDiv({ cls: 'aob-aside' });
@@ -369,7 +397,7 @@ export class DashboardView extends ItemView {
     text.value = this.filterText;
     text.addEventListener('input', () => {
       this.filterText = text.value;
-      this.renderBodyOnly();
+      this.scheduleTextFilter();
     });
 
     const since = bar.createDiv({ cls: 'aob-since' });
@@ -390,16 +418,12 @@ export class DashboardView extends ItemView {
       this.render();
     });
 
-    const pendingLabel = bar.createEl('label', { cls: 'aob-check' });
-    const pending = pendingLabel.createEl('input', { type: 'checkbox' });
-    pending.checked = this.filterPendingOnly;
-    pendingLabel.createSpan({ text: 'pendentes > 0' });
-    pending.addEventListener('change', () => {
-      this.filterPendingOnly = pending.checked;
-      this.render();
-    });
-
     const states = bar.createDiv({ cls: 'aob-states' });
+
+    const allStates = states.createEl('button', { cls: 'aob-states-action', text: 'todos' });
+    allStates.setAttribute('aria-label', 'Selecionar todos os estados');
+    allStates.addEventListener('click', () => this.selectAllStates());
+
     for (const state of this.scan.existingStates) {
       const chip = states.createEl('button', {
         cls: this.filterStates.has(state) ? 'aob-chip is-active' : 'aob-chip',
@@ -411,6 +435,10 @@ export class DashboardView extends ItemView {
         this.render();
       });
     }
+
+    const noStates = states.createEl('button', { cls: 'aob-states-action', text: 'limpar' });
+    noStates.setAttribute('aria-label', 'Limpar a seleção de estados');
+    noStates.addEventListener('click', () => this.clearStateFilter());
 
     this.renderSelect(bar, 'Ordenar por', (Object.keys(SORT_LABELS) as SortField[]).map((field) => ({
       value: field,
@@ -444,20 +472,44 @@ export class DashboardView extends ItemView {
 
   private renderBodyOnly(): void {
     if (this.scan === null) return;
-    const main = this.contentEl.querySelector('.aob-main');
-    if (!(main instanceof HTMLElement)) {
+    const results = this.contentEl.querySelector('.aob-results');
+    if (!(results instanceof HTMLElement)) {
       this.render();
       return;
     }
-    main.empty();
-    this.renderFilters(main);
-    if (this.mode === 'board') this.renderKanban(main);
-    else this.renderList(main);
+    results.empty();
+    if (this.mode === 'board') this.renderKanban(results);
+    else this.renderList(results);
     const aside = this.contentEl.querySelector('.aob-aside');
     if (aside instanceof HTMLElement) {
       aside.empty();
       this.renderDetail(aside);
     }
+  }
+
+  private scheduleTextFilter(): void {
+    this.cancelTextFilter();
+    this.textFilterHandle = window.setTimeout(() => {
+      this.textFilterHandle = null;
+      this.renderBodyOnly();
+    }, TEXT_FILTER_DEBOUNCE_MS);
+  }
+
+  private cancelTextFilter(): void {
+    if (this.textFilterHandle === null) return;
+    window.clearTimeout(this.textFilterHandle);
+    this.textFilterHandle = null;
+  }
+
+  private selectAllStates(): void {
+    if (this.scan === null) return;
+    this.filterStates = new Set(this.scan.existingStates);
+    this.render();
+  }
+
+  private clearStateFilter(): void {
+    this.filterStates = new Set();
+    this.render();
   }
 
   private visibleCards(): BoardCard[] {
@@ -479,8 +531,6 @@ export class DashboardView extends ItemView {
           (card.sections['Descrição'] ?? '').toLowerCase().includes(needle),
       );
     }
-
-    if (this.filterPendingOnly) cards = cards.filter((card) => card.pendingTasks > 0);
 
     if (this.filterSince !== '') {
       const since = parseDateValue(this.filterSince);
@@ -516,10 +566,6 @@ export class DashboardView extends ItemView {
       );
       return this.sortDirection === 'asc' ? sorted : sorted.reverse();
     }
-    if (field === 'pending') {
-      const sorted = [...cards].sort((left, right) => left.pendingTasks - right.pendingTasks);
-      return this.sortDirection === 'asc' ? sorted : sorted.reverse();
-    }
     if (field === 'mtime') {
       return sortWithEmptyLast(
         cards,
@@ -535,6 +581,15 @@ export class DashboardView extends ItemView {
   private renderKanban(parent: HTMLElement): void {
     if (this.scan === null) return;
     const cards = this.visibleCards();
+
+    if (this.filterStates.size === 0) {
+      parent.createDiv({
+        cls: 'aob-empty',
+        text: 'nenhum estado selecionado — use "todos" ou clique em um estado',
+      });
+      return;
+    }
+
     const board = parent.createDiv({ cls: 'aob-kanban' });
 
     for (const state of this.scan.existingStates) {
@@ -573,12 +628,6 @@ export class DashboardView extends ItemView {
   private renderBadges(parent: HTMLElement, card: BoardCard): void {
     if (card.repo !== null) parent.createSpan({ cls: 'aob-badge', text: card.repo });
     if (card.feature !== null) parent.createSpan({ cls: 'aob-badge', text: card.feature });
-    if (card.totalTasks > 0) {
-      parent.createSpan({
-        cls: card.pendingTasks > 0 ? 'aob-badge is-pending' : 'aob-badge is-done',
-        text: `${card.pendingTasks}/${card.totalTasks} pendentes`,
-      });
-    }
     if (isDivergent(card.state, card.status)) {
       parent.createSpan({ cls: 'aob-badge is-warning', text: `status ${card.status.value}` });
     } else if (card.status.kind === 'missing') {
@@ -594,7 +643,7 @@ export class DashboardView extends ItemView {
     const cards = this.visibleCards();
     const table = parent.createEl('table', { cls: 'aob-table' });
     const head = table.createEl('thead').createEl('tr');
-    for (const label of ['Título', 'Projeto', 'Estado', 'Feature', 'Data', 'Pendentes', 'PR']) {
+    for (const label of ['Título', 'Projeto', 'Estado', 'Feature', 'Data', 'PR']) {
       head.createEl('th', { text: label });
     }
 
@@ -614,7 +663,6 @@ export class DashboardView extends ItemView {
       } else {
         dateCell.setText('—');
       }
-      row.createEl('td', { text: `${card.pendingTasks}/${card.totalTasks}` });
       const pr = row.createEl('td');
       if (card.prUrl !== null && !card.prInvalid) {
         const link = pr.createEl('a', { text: 'abrir', href: card.prUrl });
@@ -628,7 +676,13 @@ export class DashboardView extends ItemView {
       });
     }
 
-    if (cards.length === 0) parent.createDiv({ cls: 'aob-empty', text: 'nenhum card com esses filtros' });
+    if (cards.length === 0) {
+      const text =
+        this.filterStates.size === 0
+          ? 'nenhum estado selecionado — use "todos" ou clique em um estado'
+          : 'nenhum card com esses filtros';
+      parent.createDiv({ cls: 'aob-empty', text });
+    }
   }
 
   private renderDetail(parent: HTMLElement): void {
@@ -750,27 +804,220 @@ export class DashboardView extends ItemView {
 
     if (actions.length === 0) {
       parent.createDiv({ cls: 'aob-empty', text: 'nenhuma ação configurada para este estado' });
+    } else {
+      for (const action of actions) {
+        const text = substitutePlaceholders(action.text, {
+          name: card.basename,
+          path: toPosix(this.absoluteVaultPath(card.path)),
+          link: this.obsidianLink(card.path),
+          wikilink: `[[${card.basename}]]`,
+          pr: card.basename,
+          pr_url: hasPr ? (card.prUrl ?? '') : '',
+          project: card.repo ?? '',
+          feature: card.feature ?? '',
+          branch: this.branchOf(card),
+        });
+        const button = parent.createEl('button', {
+          cls: 'aob-button aob-copy',
+          text: `Copiar — ${action.label}`,
+        });
+        button.addEventListener('click', () => void this.copyAction(button, text));
+      }
+    }
+
+    this.renderActivation(parent, card);
+  }
+
+  private renderActivation(parent: HTMLElement, card: BoardCard): void {
+    const activation = this.activationFor(card);
+    const button = parent.createEl('button', {
+      cls: 'aob-button aob-activate',
+      text: 'Ativar neste projeto',
+    });
+
+    if (activation.target === null) {
+      button.disabled = true;
+      if (activation.blocker !== null) {
+        button.setAttribute('title', activation.blocker);
+        parent.createDiv({ cls: 'aob-hint', text: activation.blocker });
+      }
       return;
     }
 
-    for (const action of actions) {
-      const text = substitutePlaceholders(action.text, {
-        name: card.basename,
-        path: this.absoluteVaultPath(card.path),
-        link: this.obsidianLink(card.path),
-        wikilink: `[[${card.basename}]]`,
-        pr: card.basename,
-        pr_url: hasPr ? (card.prUrl ?? '') : '',
-        project: card.repo ?? '',
-        feature: card.feature ?? '',
-        branch: this.branchOf(card),
-      });
-      const button = parent.createEl('button', {
-        cls: 'aob-button aob-copy',
-        text: `Copiar — ${action.label}`,
-      });
-      button.addEventListener('click', () => void this.copyAction(button, text));
+    const target = activation.target;
+    button.addEventListener('click', () => void this.activateCard(card, target));
+  }
+
+  private activationFor(card: BoardCard): { target: ActivationTarget | null; blocker: string | null } {
+    if (card.repo === null) {
+      return { target: null, blocker: 'card sem `repo:`: não há projeto para ativar' };
     }
+
+    const status = this.projectForCard(card);
+    if (status !== null) {
+      if (status.snapshot === null) return { target: null, blocker: 'projeto sem `.agent_obsidian`' };
+      if (status.verdict === 'blocked') return { target: null, blocker: status.message };
+      if (this.isActiveCard(card)) {
+        return { target: null, blocker: 'este card já é o ativo do projeto' };
+      }
+
+      const problem = this.cardTargetProblem(card, status);
+      if (problem !== null) return { target: null, blocker: problem };
+
+      return { target: { kind: 'existing', status }, blocker: null };
+    }
+
+    const candidate = this.fallbackFor(card);
+    if (candidate === null) {
+      return {
+        target: null,
+        blocker:
+          'nenhum projeto registrado nem pasta sob as raízes tem este repositório: confira o `repo:` do card e as raízes nas settings',
+      };
+    }
+
+    const problem = checkCardTarget(
+      nodePath.resolve(this.absoluteVaultPath(card.path)),
+      this.vaultBasePath,
+    );
+    if (problem !== null) return { target: null, blocker: problem };
+
+    return { target: { kind: 'bootstrap', candidate }, blocker: null };
+  }
+
+  private projectForCard(card: BoardCard): ProjectStatus | null {
+    const byRepo =
+      card.repo === null
+        ? []
+        : this.projectStatuses.filter(
+            (status) => this.projectRemotes.get(status.entry.key) === card.repo,
+          );
+    const candidates = byRepo.length > 0 ? byRepo : this.projectStatuses;
+
+    const leaf = repoLeaf(card.repo);
+    if (leaf !== null) {
+      const name = normalizeProjectName(leaf);
+      const byName = candidates.filter((status) => status.entry.name === name);
+      if (byName.length === 1) return byName[0];
+      if (byName.length > 1) return null;
+    }
+
+    return candidates.length === 1 ? candidates[0] : null;
+  }
+
+  private fallbackFor(card: BoardCard): ProjectCandidate | null {
+    if (card.repo === null) return null;
+
+    const byRepo = this.projectCandidates.filter((candidate) => candidate.slug === card.repo);
+    if (byRepo.length === 1) return byRepo[0];
+    if (byRepo.length === 0) return null;
+
+    const leaf = repoLeaf(card.repo);
+    if (leaf === null) return null;
+    const name = normalizeProjectName(leaf);
+    const byName = byRepo.filter((candidate) => candidate.name === name);
+    return byName.length === 1 ? byName[0] : null;
+  }
+
+  private buildProjectCandidates(): ProjectCandidate[] {
+    const home = process.env.USERPROFILE ?? os.homedir();
+    const excluded = new Set(
+      this.host.settings.excludedPaths
+        .map((entry) => entry.trim())
+        .filter((entry) => entry !== '')
+        .map((entry) => resolveProjectKey(expandHome(entry, home))),
+    );
+    const directories = new Set<string>();
+
+    for (const rawRoot of this.host.settings.roots) {
+      if (rawRoot.trim() === '') continue;
+      const root = nodePath.resolve(expandHome(rawRoot, home));
+      if (probePath(root) !== 'dir') continue;
+
+      let entries: string[];
+      try {
+        entries = listDirectories(root);
+      } catch {
+        continue;
+      }
+      for (const name of entries) {
+        if (name.startsWith('.') || name === 'node_modules') continue;
+        const child = nodePath.join(root, name);
+        if (probePath(child) === 'dir') directories.add(child);
+      }
+    }
+
+    for (const rawManual of this.host.settings.extraProjects) {
+      if (rawManual.trim() === '') continue;
+      directories.add(nodePath.resolve(expandHome(rawManual, home)));
+    }
+
+    return [...directories]
+      .filter((path) => !excluded.has(resolveProjectKey(path)))
+      .filter((path) => probePath(nodePath.join(path, '.agent_obsidian')) !== 'file')
+      .map((path) => ({ path, name: normalizeProjectName(path), slug: readRepoSlug(path) }));
+  }
+
+  private cardTargetProblem(card: BoardCard, status: ProjectStatus): string | null {
+    if (status.declaredVault === null) return null;
+    return checkCardTarget(nodePath.resolve(this.absoluteVaultPath(card.path)), status.declaredVault);
+  }
+
+  private async activateCard(card: BoardCard, target: ActivationTarget): Promise<void> {
+    if (target.kind === 'bootstrap') {
+      await this.activateInNewProject(card, target.candidate);
+      return;
+    }
+
+    const status = target.status;
+    const replacesOther = status.currentCardName !== null && !this.isActiveCard(card);
+    if (replacesOther) {
+      const confirmed = await confirmDestructive(
+        this.app,
+        `Ativar ${card.basename} em ${status.entry.name}?`,
+        `O card ativo atual será substituído:\n${status.currentCardName}\n${status.currentCardPath ?? ''}`,
+        'Ativar',
+      );
+      if (!confirmed) return;
+    }
+
+    const fresh = readState(status.statePath);
+    if (fresh.error !== null) {
+      new Notice(`${status.entry.name}: ${fresh.error}`, 8000);
+      return;
+    }
+    if (fresh.snapshot === null) {
+      new Notice(`${status.entry.name}: \`.agent_obsidian\` não existe mais`, 8000);
+      return;
+    }
+
+    const outcome = activateCurrentCard(
+      status.statePath,
+      fresh.snapshot,
+      { vaultPath: this.vaultBasePath, projectName: normalizeProjectName(status.entry.path) },
+      { name: card.basename, path: nodePath.resolve(this.absoluteVaultPath(card.path)) },
+    );
+    new Notice(`${status.entry.name}: ${outcome.message}`, outcome.kind === 'blocked' ? 8000 : 4000);
+    await this.refresh();
+  }
+
+  private async activateInNewProject(card: BoardCard, candidate: ProjectCandidate): Promise<void> {
+    const statePath = nodePath.join(candidate.path, '.agent_obsidian');
+    const confirmed = await confirmDestructive(
+      this.app,
+      `Ativar ${card.basename} em ${candidate.name}?`,
+      `O projeto ainda não tem \`.agent_obsidian\`. Ele será criado em:\n${statePath}\n\ncom este card já como ativo.`,
+      'Criar e ativar',
+    );
+    if (!confirmed) return;
+
+    const outcome = initializeStateFile(
+      statePath,
+      { vaultPath: this.vaultBasePath, projectName: candidate.name },
+      { name: card.basename, path: nodePath.resolve(this.absoluteVaultPath(card.path)) },
+    );
+    new Notice(`${candidate.name}: ${outcome.message}`, outcome.kind === 'blocked' ? 8000 : 4000);
+    await this.refresh();
   }
 
   private branchOf(card: BoardCard): string {
@@ -967,12 +1214,17 @@ export class DashboardView extends ItemView {
   }
 
   private openCreateCardModal(): void {
-    new CreateCardModal(this.app, (title, state, feature) => {
-      void this.createCard(title, state, feature);
+    new CreateCardModal(this.app, (title, state, feature, workType) => {
+      void this.createCard(title, state, feature, workType);
     }).open();
   }
 
-  private async createCard(title: string, state: CardState, feature: string): Promise<void> {
+  private async createCard(
+    title: string,
+    state: CardState,
+    feature: string,
+    workType: WorkType,
+  ): Promise<void> {
     const name = sanitizeCardName(title);
     if (name === '') {
       new Notice('Informe um título para o card.');
@@ -985,9 +1237,10 @@ export class DashboardView extends ItemView {
       return;
     }
 
-    const templateFile = this.app.vault.getAbstractFileByPath(TEMPLATE_PATH);
+    const templatePath = templatePathForWorkType(workType);
+    const templateFile = this.app.vault.getAbstractFileByPath(templatePath);
     if (!(templateFile instanceof TFile)) {
-      new Notice(`Template não encontrado: ${TEMPLATE_PATH}`);
+      new Notice(`Template não encontrado: ${templatePath}`);
       return;
     }
 
@@ -1061,6 +1314,7 @@ function blockedStatus(
     currentCardName: null,
     currentCardPath: null,
     targetProblem: null,
+    declaredVault: null,
     snapshot,
   };
 }
@@ -1102,9 +1356,14 @@ async function openInSystem(target: string): Promise<void> {
   }
 }
 
-function confirmDestructive(app: App, title: string, body: string): Promise<boolean> {
+function confirmDestructive(
+  app: App,
+  title: string,
+  body: string,
+  confirmLabel = 'Limpar',
+): Promise<boolean> {
   return new Promise((resolve) => {
-    const modal = new ConfirmModal(app, title, body, resolve);
+    const modal = new ConfirmModal(app, title, body, confirmLabel, resolve);
     modal.open();
   });
 }
@@ -1112,13 +1371,21 @@ function confirmDestructive(app: App, title: string, body: string): Promise<bool
 class ConfirmModal extends Modal {
   private readonly title: string;
   private readonly body: string;
+  private readonly confirmLabel: string;
   private readonly resolve: (value: boolean) => void;
   private answered = false;
 
-  constructor(app: App, title: string, body: string, resolve: (value: boolean) => void) {
+  constructor(
+    app: App,
+    title: string,
+    body: string,
+    confirmLabel: string,
+    resolve: (value: boolean) => void,
+  ) {
     super(app);
     this.title = title;
     this.body = body;
+    this.confirmLabel = confirmLabel;
     this.resolve = resolve;
   }
 
@@ -1133,7 +1400,10 @@ class ConfirmModal extends Modal {
     const buttons = this.contentEl.createDiv({ cls: 'aob-modal-buttons' });
     const cancel = buttons.createEl('button', { cls: 'aob-button', text: 'Cancelar' });
     cancel.addEventListener('click', () => this.finish(false));
-    const confirm = buttons.createEl('button', { cls: 'aob-button is-danger', text: 'Limpar' });
+    const confirm = buttons.createEl('button', {
+      cls: 'aob-button is-danger',
+      text: this.confirmLabel,
+    });
     confirm.addEventListener('click', () => this.finish(true));
   }
 
@@ -1150,12 +1420,21 @@ class ConfirmModal extends Modal {
 }
 
 class CreateCardModal extends Modal {
-  private readonly onSubmit: (title: string, state: CardState, feature: string) => void;
+  private readonly onSubmit: (
+    title: string,
+    state: CardState,
+    feature: string,
+    workType: WorkType,
+  ) => void;
   private titleValue = '';
   private stateValue: CardState = '1.not_started';
   private featureValue = '';
+  private workTypeValue: WorkType = 'implementation';
 
-  constructor(app: App, onSubmit: (title: string, state: CardState, feature: string) => void) {
+  constructor(
+    app: App,
+    onSubmit: (title: string, state: CardState, feature: string, workType: WorkType) => void,
+  ) {
     super(app);
     this.onSubmit = onSubmit;
   }
@@ -1164,7 +1443,7 @@ class CreateCardModal extends Modal {
     this.titleEl.setText('Novo card');
     this.contentEl.createEl('p', {
       cls: 'aob-hint',
-      text: 'O card nasce de `templates/card template.md`, com o frontmatter preenchido para a pasta escolhida.',
+      text: 'O card nasce de `templates/card/{tipo}.md`, com o frontmatter do template preservado e preenchido para a pasta escolhida.',
     });
 
     const titleField = this.contentEl.createDiv({ cls: 'aob-form-row' });
@@ -1188,6 +1467,17 @@ class CreateCardModal extends Modal {
       this.stateValue = stateSelect.value as CardState;
     });
 
+    const typeField = this.contentEl.createDiv({ cls: 'aob-form-row' });
+    typeField.createEl('label', { cls: 'aob-form-label', text: 'Tipo' });
+    const typeSelect = typeField.createEl('select', { cls: 'aob-select' });
+    for (const workType of WORK_TYPES) {
+      typeSelect.createEl('option', { value: workType, text: workType });
+    }
+    typeSelect.value = this.workTypeValue;
+    typeSelect.addEventListener('change', () => {
+      this.workTypeValue = typeSelect.value as WorkType;
+    });
+
     const featureField = this.contentEl.createDiv({ cls: 'aob-form-row' });
     featureField.createEl('label', { cls: 'aob-form-label', text: 'Feature (opcional)' });
     const featureInput = featureField.createEl('input', {
@@ -1201,7 +1491,7 @@ class CreateCardModal extends Modal {
     });
 
     const submit = (): void => {
-      this.onSubmit(this.titleValue, this.stateValue, this.featureValue);
+      this.onSubmit(this.titleValue, this.stateValue, this.featureValue, this.workTypeValue);
       this.close();
     };
 

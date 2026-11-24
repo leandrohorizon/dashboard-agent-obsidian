@@ -8,9 +8,10 @@ comando.
 ## Princípio
 
 O plugin **lê** o board e os `.agent_obsidian` e **não executa** comando do fluxo
-nem move card entre pastas. As únicas escritas são manutenção do state (reparo
-idempotente e limpeza de `current_card`, com confirmação) e criação de card novo
-a partir do template.
+nem move card entre pastas. As escritas no state são manutenção (reparo
+idempotente), limpeza de `current_card` e ativação do card do projeto — as duas
+últimas sempre com confirmação quando substituem algo, relendo o arquivo antes de
+gravar. Também cria card novo a partir do template do `work_type` escolhido.
 
 Não conhece agente de IA nenhum: o comando sugerido é dado de configuração.
 
@@ -35,8 +36,8 @@ fora do vault) e Node.js 20+ para build.
 ```bash
 npm run watch     # rebuild contínuo
 npm run verify    # typecheck + testes unitários + build + teste de integração
-npm test          # 106 verificações das funções puras
-npm run smoke     # 45 verificações de integração contra um vault real
+npm test          # 129 verificações das funções puras
+npm run smoke     # 79 verificações de integração contra um vault real
 ```
 
 O teste de integração carrega o `main.js` gerado com um `obsidian` stub e um
@@ -63,3 +64,38 @@ continua verde.
 | Ações de copiar | lista JSON com `id`, `label`, `states`, `text` e `onlyWithPr` opcional |
 
 Um diretório só é projeto se tiver `.agent_obsidian` na raiz.
+
+### Ações de copiar
+
+Cada ação copia um texto para a área de transferência; quem executa é a CLI do
+agente. As ações padrão dos comandos do fluxo copiam o **caminho absoluto** do
+card em formato posix (`{{path}}`), para não depender da busca por nome:
+
+```json
+{ "id": "work-on-card", "label": "trabalhar no card", "states": ["2.in_progress"], "text": "/work-on-card \"{{path}}\"" }
+```
+
+Placeholders disponíveis: `{{path}}`, `{{name}}`, `{{link}}`, `{{wikilink}}`,
+`{{pr}}`, `{{pr_url}}`, `{{project}}`, `{{feature}}` e `{{branch}}`.
+
+## Ativar card
+
+No detalhe do card, **Ativar neste projeto** grava `current_card` no
+`.agent_obsidian` do projeto dono. O projeto é resolvido pelo repositório: o
+remote do `.git/config` de cada projeto registrado é normalizado e comparado com
+o `repo:` do card; quando mais de um projeto aponta para o mesmo remote, o nome
+da pasta decide. Sem remote legível, a resolução cai para o nome do repositório
+do card comparado ao nome da pasta.
+
+O botão fica desabilitado, com o motivo visível, quando o card não tem `repo:`,
+nenhuma pasta com esse repositório é encontrada, o state é JSON inválido ou de
+versão futura, o card já é o ativo, ou o caminho do card cai fora do board do
+vault declarado no state.
+
+Quando o repositório do card não casa com nenhum projeto registrado, o plugin
+procura sob as raízes configuradas uma pasta cujo remote seja o do card e oferece
+**criar** o `.agent_obsidian` ali, com confirmação, já com o card ativo.
+
+Ativar grava **somente** `current_card`: os outros campos são preservados como
+estão, inclusive quando o painel de Projetos sinaliza que o state precisa de
+reparo — reparo é ação própria, não efeito colateral de ativar.

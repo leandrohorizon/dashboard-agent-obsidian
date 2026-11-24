@@ -2,6 +2,9 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import {
   evaluateAgentState,
+  guidelinesPath,
+  condensedMemoryPath,
+  SUPPORTED_VERSION,
   serializeAgentState,
   stripBom,
   type StateContext,
@@ -161,4 +164,80 @@ export function clearCurrentCard(
   if (!write.ok) return { kind: 'blocked', message: write.message, changes: [] };
 
   return { kind: 'ok', message: '`current_card` limpo', changes: ['current_card'] };
+}
+
+export interface ActiveCard {
+  name: string;
+  path: string;
+}
+
+export function initializeStateFile(
+  absolutePath: string,
+  context: StateContext,
+  card: ActiveCard,
+): StateOutcome {
+  const data = {
+    version: SUPPORTED_VERSION,
+    vault_path: context.vaultPath,
+    guidelines_path: guidelinesPath(context.vaultPath),
+    condensed_memory_path: condensedMemoryPath(context.vaultPath, context.projectName),
+    current_card: { name: card.name, path: card.path },
+  };
+
+  try {
+    fs.writeFileSync(absolutePath, serializeAgentState(data), {
+      encoding: 'utf8',
+      flag: 'wx',
+    });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+      return {
+        kind: 'blocked',
+        message: 'o `.agent_obsidian` apareceu desde a varredura; atualize e tente de novo',
+        changes: [],
+      };
+    }
+    return { kind: 'blocked', message: `falha ao criar: ${describeError(error)}`, changes: [] };
+  }
+
+  return { kind: 'ok', message: `\`.agent_obsidian\` criado e card ativo: ${card.name}`, changes: ['current_card'] };
+}
+
+export function parseStateObject(text: string): Record<string, unknown> | null {
+  try {
+    const parsed: unknown = JSON.parse(stripBom(text));
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null;
+    return { ...(parsed as Record<string, unknown>) };
+  } catch {
+    return null;
+  }
+}
+
+export function activateCurrentCard(
+  absolutePath: string,
+  expected: StateSnapshot,
+  context: StateContext,
+  card: ActiveCard,
+): StateOutcome {
+  const read = readState(absolutePath);
+
+  if (read.error !== null) return { kind: 'blocked', message: read.error, changes: [] };
+  if (read.snapshot === null) {
+    return { kind: 'blocked', message: '`.agent_obsidian` não existe mais neste projeto', changes: [] };
+  }
+
+  const verdict = evaluateAgentState(read.snapshot.text, context);
+  if (verdict.kind === 'blocked') return { kind: 'blocked', message: verdict.message, changes: [] };
+
+  const data = parseStateObject(read.snapshot.text);
+  if (data === null) {
+    return { kind: 'blocked', message: 'o conteúdo do state não é um objeto JSON', changes: [] };
+  }
+
+  data.current_card = { name: card.name, path: card.path };
+
+  const write = writeWithConcurrencyCheck(absolutePath, serializeAgentState(data), expected);
+  if (!write.ok) return { kind: 'blocked', message: write.message, changes: [] };
+
+  return { kind: 'ok', message: `card ativo: ${card.name}`, changes: ['current_card'] };
 }

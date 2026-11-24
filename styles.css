@@ -83,14 +83,6 @@
   gap: 4px;
 }
 
-.aob-check {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  font-size: var(--font-ui-smaller);
-  color: var(--text-muted);
-}
-
 .aob-states {
   display: flex;
   gap: 4px;
@@ -113,6 +105,21 @@
   border-color: var(--interactive-accent);
 }
 
+.aob-states-action {
+  font-size: var(--font-ui-smaller);
+  padding: 2px 8px;
+  border-radius: var(--radius-s);
+  border: 1px solid var(--background-modifier-border);
+  background: var(--background-secondary);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.aob-states-action:hover {
+  color: var(--text-normal);
+  border-color: var(--interactive-accent);
+}
+
 .aob-body {
   display: flex;
   flex: 1 1 auto;
@@ -124,6 +131,10 @@
   flex: 1 1 auto;
   min-width: 0;
   overflow: auto;
+}
+
+.aob-results {
+  display: contents;
 }
 
 .aob-aside {
@@ -209,11 +220,6 @@
   background: var(--background-modifier-hover);
   color: var(--text-muted);
   white-space: nowrap;
-}
-
-.aob-badge.is-pending {
-  background: var(--color-orange);
-  color: var(--text-on-accent);
 }
 
 .aob-badge.is-done {

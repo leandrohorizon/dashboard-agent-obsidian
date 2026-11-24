@@ -10,9 +10,9 @@ export interface DashboardSettings {
 
 export const DEFAULT_ACTIONS_JSON = JSON.stringify(
   [
-    { id: 'start-card', label: 'iniciar o card', states: ['1.not_started'], text: '/start-card "{{name}}"' },
-    { id: 'work-on-card', label: 'trabalhar no card', states: ['2.in_progress'], text: '/work-on-card "{{name}}"' },
-    { id: 'complete-card', label: 'concluir o card', states: ['3.in_review'], text: '/complete-card "{{name}}"' },
+    { id: 'start-card', label: 'iniciar o card', states: ['1.not_started'], text: '/start-card "{{path}}"' },
+    { id: 'work-on-card', label: 'trabalhar no card', states: ['2.in_progress'], text: '/work-on-card "{{path}}"' },
+    { id: 'complete-card', label: 'concluir o card', states: ['3.in_review'], text: '/complete-card "{{path}}"' },
     {
       id: 'copy-pr',
       label: 'nome e link do PR',
@@ -112,7 +112,7 @@ export class DashboardSettingTab extends PluginSettingTab {
 
     containerEl.createEl('h3', { text: 'Ações de copiar' });
     containerEl.createEl('p', {
-      text: 'Lista JSON. Campos: id, label, states e text. Placeholders: {{name}}, {{path}}, {{project}}, {{feature}}, {{branch}}. O botão sempre mostra o verbo "Copiar".',
+      text: 'Lista JSON. Campos: id, label, states, text e onlyWithPr. Placeholders: {{path}} (caminho absoluto do card em formato posix), {{name}}, {{link}}, {{wikilink}}, {{pr}}, {{pr_url}}, {{project}}, {{feature}}, {{branch}}. O botão sempre mostra o verbo "Copiar".',
     });
 
     const errorsEl = containerEl.createDiv({ cls: 'aob-settings-errors' });

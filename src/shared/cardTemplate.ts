@@ -1,5 +1,15 @@
 import type { CardState } from './types';
 
+export const WORK_TYPES = [
+  'implementation',
+  'report',
+  'investigation',
+  'experiment',
+  'epic',
+] as const;
+
+export type WorkType = (typeof WORK_TYPES)[number];
+
 export const STATUS_BY_STATE: Record<CardState, string> = {
   '0.backlog': 'Not Started',
   '1.not_started': 'Not Started',
@@ -21,6 +31,13 @@ export interface CardTemplateValues {
 
 const INVALID_NAME_CHARS = /[\\/:*?"<>|]/g;
 const CONTROL_CHARS = /[\u0000-\u001f]/g;
+const FRONTMATTER_BLOCK = /^---\r?\n([\s\S]*?)\r?\n---[ \t]*\r?\n?/;
+const VALUE_KEYS = ['repo', 'branch', 'feature', 'created'] as const;
+const STATUS_LIST_ITEM = /^\s+-\s/;
+
+export function templatePathForWorkType(workType: WorkType): string {
+  return `templates/card/${workType}.md`;
+}
 
 export function sanitizeCardName(input: string): string {
   return input
@@ -33,24 +50,37 @@ export function sanitizeCardName(input: string): string {
 }
 
 export function fillCardTemplate(template: string, values: CardTemplateValues): string {
-  const frontmatter = [
-    '---',
-    `repo: ${values.repo}`,
-    `branch: ${values.branch}`,
-    `status: ${values.status}`,
-    `feature: ${values.feature}`,
-    `created: ${values.created}`,
-    'started:',
-    'reviewed:',
-    'completed:',
-    'pr_url:',
-    '---',
-  ].join('\n');
+  const block = FRONTMATTER_BLOCK.exec(template);
+  if (block === null) return template;
 
-  const existing = /^---\r?\n[\s\S]*?\r?\n---[ \t]*\r?\n?/.exec(template);
-  const body = existing === null ? template : template.slice(existing[0].length);
+  const lines = patchFrontmatter(block[1].split(/\r?\n/), values);
+  return `---\n${lines.join('\n')}\n---\n${template.slice(block[0].length)}`;
+}
 
-  return `${frontmatter}\n${body.startsWith('\n') ? body : `\n${body}`}`;
+function patchFrontmatter(lines: string[], values: CardTemplateValues): string[] {
+  const patched: string[] = [];
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const key = frontmatterKey(lines[index]);
+
+    if (key === 'status') {
+      patched.push('status:', `  - ${values.status}`);
+      while (index + 1 < lines.length && STATUS_LIST_ITEM.test(lines[index + 1])) index += 1;
+      continue;
+    }
+    if (key !== null && (VALUE_KEYS as readonly string[]).includes(key)) {
+      patched.push(`${key}: ${values[key as (typeof VALUE_KEYS)[number]]}`);
+      continue;
+    }
+    patched.push(lines[index]);
+  }
+
+  return patched;
+}
+
+function frontmatterKey(line: string): string | null {
+  const match = /^([A-Za-z_][A-Za-z0-9_]*):/.exec(line);
+  return match === null ? null : match[1];
 }
 
 export function todayIso(now: Date = new Date()): string {
