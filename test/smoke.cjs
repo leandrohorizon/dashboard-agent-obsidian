@@ -678,20 +678,24 @@ async function main() {
   await flushSearch();
   equal('lista volta ao total depois de limpar a busca', rowCount(), kanbanBefore);
 
-  const pendingFilter = [...view.contentEl.querySelectorAll('.aob-check input')][0];
-  pendingFilter.checked = true;
-  pendingFilter.dispatchEvent(new window.Event('change'));
-  const afterPending = view.contentEl.querySelectorAll('.aob-table tbody tr').length;
-  check('filtro de pendentes reduz a lista', afterPending <= kanbanBefore, `${afterPending} vs ${kanbanBefore}`);
-
-  const pendingOff = [...view.contentEl.querySelectorAll('.aob-check input')][0];
-  pendingOff.checked = false;
-  pendingOff.dispatchEvent(new window.Event('change'));
+  equal('filtro de pendentes removido da barra', view.contentEl.querySelectorAll('.aob-check').length, 0);
+  const headerLabels = [...view.contentEl.querySelectorAll('.aob-table thead th')].map(
+    (cell) => cell.textContent,
+  );
+  check('coluna de pendentes removida da lista', !headerLabels.includes('Pendentes'), JSON.stringify(headerLabels));
+  const sortOptions = [...(selectFor('Ordenar por')?.querySelectorAll('option') ?? [])].map(
+    (option) => option.value,
+  );
+  check('ordenação por pendentes removida', !sortOptions.includes('pending'), JSON.stringify(sortOptions));
 
   const kanbanAgain = [...view.contentEl.querySelectorAll('.aob-tab')].find(
     (button) => button.textContent === 'Kanban',
   );
   kanbanAgain.click();
+  check(
+    'indicador de pendentes removido dos tiles',
+    !/\d+\/\d+ pendentes/.test(view.contentEl.textContent),
+  );
   const otherStates = stateFolders.filter((state) => state !== '2.in_progress');
   for (const state of otherStates) {
     const chip = [...view.contentEl.querySelectorAll('.aob-chip')].find(

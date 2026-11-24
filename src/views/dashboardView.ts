@@ -63,7 +63,7 @@ const TEXT_FILTER_DEBOUNCE_MS = 150;
 
 type ViewMode = 'board' | 'list' | 'projects';
 type SinceField = DateField | 'mtime';
-type SortField = DateField | 'mtime' | 'title' | 'project' | 'state' | 'pending';
+type SortField = DateField | 'mtime' | 'title' | 'project' | 'state';
 
 interface ProjectStatus {
   entry: ProjectEntry;
@@ -96,7 +96,6 @@ const SORT_LABELS: Record<SortField, string> = {
   title: 'título',
   project: 'projeto',
   state: 'estado',
-  pending: 'pendentes',
 };
 
 export class DashboardView extends ItemView {
@@ -119,7 +118,6 @@ export class DashboardView extends ItemView {
   private filterText = '';
   private filterSince = '';
   private filterSinceField: SinceField = 'mtime';
-  private filterPendingOnly = false;
   private sortField: SortField = 'mtime';
   private sortDirection: 'asc' | 'desc' = 'desc';
 
@@ -402,15 +400,6 @@ export class DashboardView extends ItemView {
       this.render();
     });
 
-    const pendingLabel = bar.createEl('label', { cls: 'aob-check' });
-    const pending = pendingLabel.createEl('input', { type: 'checkbox' });
-    pending.checked = this.filterPendingOnly;
-    pendingLabel.createSpan({ text: 'pendentes > 0' });
-    pending.addEventListener('change', () => {
-      this.filterPendingOnly = pending.checked;
-      this.render();
-    });
-
     const states = bar.createDiv({ cls: 'aob-states' });
     for (const state of this.scan.existingStates) {
       const chip = states.createEl('button', {
@@ -505,8 +494,6 @@ export class DashboardView extends ItemView {
       );
     }
 
-    if (this.filterPendingOnly) cards = cards.filter((card) => card.pendingTasks > 0);
-
     if (this.filterSince !== '') {
       const since = parseDateValue(this.filterSince);
       cards = cards.filter((card) => {
@@ -539,10 +526,6 @@ export class DashboardView extends ItemView {
       const sorted = [...cards].sort(
         (left, right) => CARD_STATES.indexOf(left.state) - CARD_STATES.indexOf(right.state),
       );
-      return this.sortDirection === 'asc' ? sorted : sorted.reverse();
-    }
-    if (field === 'pending') {
-      const sorted = [...cards].sort((left, right) => left.pendingTasks - right.pendingTasks);
       return this.sortDirection === 'asc' ? sorted : sorted.reverse();
     }
     if (field === 'mtime') {
@@ -598,12 +581,6 @@ export class DashboardView extends ItemView {
   private renderBadges(parent: HTMLElement, card: BoardCard): void {
     if (card.repo !== null) parent.createSpan({ cls: 'aob-badge', text: card.repo });
     if (card.feature !== null) parent.createSpan({ cls: 'aob-badge', text: card.feature });
-    if (card.totalTasks > 0) {
-      parent.createSpan({
-        cls: card.pendingTasks > 0 ? 'aob-badge is-pending' : 'aob-badge is-done',
-        text: `${card.pendingTasks}/${card.totalTasks} pendentes`,
-      });
-    }
     if (isDivergent(card.state, card.status)) {
       parent.createSpan({ cls: 'aob-badge is-warning', text: `status ${card.status.value}` });
     } else if (card.status.kind === 'missing') {
@@ -619,7 +596,7 @@ export class DashboardView extends ItemView {
     const cards = this.visibleCards();
     const table = parent.createEl('table', { cls: 'aob-table' });
     const head = table.createEl('thead').createEl('tr');
-    for (const label of ['Título', 'Projeto', 'Estado', 'Feature', 'Data', 'Pendentes', 'PR']) {
+    for (const label of ['Título', 'Projeto', 'Estado', 'Feature', 'Data', 'PR']) {
       head.createEl('th', { text: label });
     }
 
@@ -639,7 +616,6 @@ export class DashboardView extends ItemView {
       } else {
         dateCell.setText('—');
       }
-      row.createEl('td', { text: `${card.pendingTasks}/${card.totalTasks}` });
       const pr = row.createEl('td');
       if (card.prUrl !== null && !card.prInvalid) {
         const link = pr.createEl('a', { text: 'abrir', href: card.prUrl });
