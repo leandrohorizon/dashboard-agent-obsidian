@@ -162,3 +162,42 @@ export function clearCurrentCard(
 
   return { kind: 'ok', message: '`current_card` limpo', changes: ['current_card'] };
 }
+
+export interface ActiveCard {
+  name: string;
+  path: string;
+}
+
+export function activateCurrentCard(
+  absolutePath: string,
+  expected: StateSnapshot,
+  context: StateContext,
+  card: ActiveCard,
+): StateOutcome {
+  const read = readState(absolutePath);
+
+  if (read.error !== null) return { kind: 'blocked', message: read.error, changes: [] };
+  if (read.snapshot === null) {
+    return { kind: 'blocked', message: '`.agent_obsidian` não existe mais neste projeto', changes: [] };
+  }
+
+  const verdict = evaluateAgentState(read.snapshot.text, context);
+
+  if (verdict.kind === 'blocked') return { kind: 'blocked', message: verdict.message, changes: [] };
+  if (verdict.kind === 'repair') {
+    return {
+      kind: 'blocked',
+      message: 'o state precisa de reparo antes de ativar um card; rode "Reparar state" primeiro',
+      changes: [],
+    };
+  }
+
+  const data = {
+    ...verdict.data,
+    current_card: { name: card.name, path: card.path },
+  };
+  const write = writeWithConcurrencyCheck(absolutePath, serializeAgentState(data), expected);
+  if (!write.ok) return { kind: 'blocked', message: write.message, changes: [] };
+
+  return { kind: 'ok', message: `card ativo: ${card.name}`, changes: ['current_card'] };
+}

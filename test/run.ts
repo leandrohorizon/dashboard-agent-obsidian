@@ -26,6 +26,7 @@ import { parseCardRefs } from '../src/shared/cardRefs';
 import * as nodeFs from 'fs';
 import * as nodeOs from 'os';
 import {
+  activateCurrentCard,
   clearCurrentCard,
   readState,
   repairStateFile,
@@ -575,6 +576,59 @@ const blockedClearSnapshot = readState(stateFile).snapshot;
 equal(
   'limpar bloqueado quando o state precisa de reparo',
   blockedClearSnapshot === null ? 'sem snapshot' : clearCurrentCard(stateFile, blockedClearSnapshot, stateContext).kind,
+  'blocked',
+);
+
+nodeFs.writeFileSync(stateFile, JSON.stringify(fullState), 'utf8');
+const activateSnapshot = readState(stateFile).snapshot;
+equal(
+  'ativar current_card',
+  activateSnapshot === null
+    ? 'sem snapshot'
+    : activateCurrentCard(stateFile, activateSnapshot, stateContext, {
+        name: 'novo card',
+        path: 'C:/board/novo.md',
+      }).kind,
+  'ok',
+);
+const activated = JSON.parse(nodeFs.readFileSync(stateFile, 'utf8'));
+equal('card ativo gravado', activated.current_card, {
+  name: 'novo card',
+  path: 'C:/board/novo.md',
+});
+equal('ativar preserva outras chaves', activated.chave_extra, 'preservar');
+equal('ativar preserva version', activated.version, '2.0');
+
+const staleActivationSnapshot = readState(stateFile).snapshot;
+nodeFs.writeFileSync(stateFile, JSON.stringify({ ...activated, chave_extra: 'mudou' }), 'utf8');
+const staleActivation =
+  staleActivationSnapshot === null
+    ? null
+    : activateCurrentCard(stateFile, staleActivationSnapshot, stateContext, {
+        name: 'outro card',
+        path: 'C:/board/outro.md',
+      });
+check(
+  'ativar aborta quando o arquivo muda entre leitura e escrita',
+  staleActivation !== null && staleActivation.kind === 'blocked',
+  JSON.stringify(staleActivation),
+);
+equal(
+  'ativar abortado não regrava o card',
+  JSON.parse(nodeFs.readFileSync(stateFile, 'utf8')).current_card.name,
+  'novo card',
+);
+
+nodeFs.writeFileSync(stateFile, JSON.stringify({ version: '1.0' }), 'utf8');
+const repairActivationSnapshot = readState(stateFile).snapshot;
+equal(
+  'ativar bloqueado quando o state precisa de reparo',
+  repairActivationSnapshot === null
+    ? 'sem snapshot'
+    : activateCurrentCard(stateFile, repairActivationSnapshot, stateContext, {
+        name: 'x',
+        path: 'C:/board/x.md',
+      }).kind,
   'blocked',
 );
 

@@ -34,8 +34,10 @@ import {
 } from '../board/index';
 import { discoverProjects, type FsProbe, type ProjectEntry, type RegistryResult } from '../projects/registry';
 import { expandHome, isPathInside, normalizeProjectName } from '../shared/paths';
+import { repoLeaf } from '../shared/repo';
 import { evaluateAgentState, readCurrentCard } from '../shared/state';
 import {
+  activateCurrentCard,
   clearCurrentCard,
   readState,
   repairStateFile,
@@ -73,6 +75,7 @@ interface ProjectStatus {
   currentCardName: string | null;
   currentCardPath: string | null;
   targetProblem: string | null;
+  declaredVault: string | null;
   snapshot: StateSnapshot | null;
 }
 
@@ -225,6 +228,7 @@ export class DashboardView extends ItemView {
         currentCardName: null,
         currentCardPath: null,
         targetProblem: null,
+        declaredVault: null,
         snapshot: null,
       };
     }
@@ -259,6 +263,7 @@ export class DashboardView extends ItemView {
       currentCardName: current.name,
       currentCardPath: current.path,
       targetProblem: target,
+      declaredVault,
       snapshot: read.snapshot,
     };
   }
@@ -770,27 +775,108 @@ export class DashboardView extends ItemView {
 
     if (actions.length === 0) {
       parent.createDiv({ cls: 'aob-empty', text: 'nenhuma ação configurada para este estado' });
+    } else {
+      for (const action of actions) {
+        const text = substitutePlaceholders(action.text, {
+          name: card.basename,
+          path: this.absoluteVaultPath(card.path),
+          link: this.obsidianLink(card.path),
+          wikilink: `[[${card.basename}]]`,
+          pr: card.basename,
+          pr_url: hasPr ? (card.prUrl ?? '') : '',
+          project: card.repo ?? '',
+          feature: card.feature ?? '',
+          branch: this.branchOf(card),
+        });
+        const button = parent.createEl('button', {
+          cls: 'aob-button aob-copy',
+          text: `Copiar — ${action.label}`,
+        });
+        button.addEventListener('click', () => void this.copyAction(button, text));
+      }
+    }
+
+    this.renderActivation(parent, card);
+  }
+
+  private renderActivation(parent: HTMLElement, card: BoardCard): void {
+    const activation = this.activationFor(card);
+    const button = parent.createEl('button', {
+      cls: 'aob-button aob-activate',
+      text: 'Ativar neste projeto',
+    });
+
+    if (activation.blocker !== null || activation.status === null) {
+      button.disabled = true;
+      if (activation.blocker !== null) button.setAttribute('title', activation.blocker);
+      parent.createDiv({ cls: 'aob-hint', text: activation.blocker ?? '' });
       return;
     }
 
-    for (const action of actions) {
-      const text = substitutePlaceholders(action.text, {
-        name: card.basename,
-        path: this.absoluteVaultPath(card.path),
-        link: this.obsidianLink(card.path),
-        wikilink: `[[${card.basename}]]`,
-        pr: card.basename,
-        pr_url: hasPr ? (card.prUrl ?? '') : '',
-        project: card.repo ?? '',
-        feature: card.feature ?? '',
-        branch: this.branchOf(card),
-      });
-      const button = parent.createEl('button', {
-        cls: 'aob-button aob-copy',
-        text: `Copiar — ${action.label}`,
-      });
-      button.addEventListener('click', () => void this.copyAction(button, text));
+    const status = activation.status;
+    button.addEventListener('click', () => void this.activateCard(card, status));
+  }
+
+  private activationFor(card: BoardCard): { status: ProjectStatus | null; blocker: string | null } {
+    const status = this.projectForCard(card);
+
+    if (card.repo === null) return { status, blocker: 'card sem `repo:`: não há projeto para ativar' };
+    if (status === null) return { status, blocker: 'projeto do card não está entre os registrados' };
+    if (status.snapshot === null) return { status, blocker: 'projeto sem `.agent_obsidian`' };
+    if (status.verdict === 'blocked') return { status, blocker: status.message };
+    if (status.verdict === 'repair') return { status, blocker: 'o state precisa de reparo antes de ativar' };
+    if (this.isActiveCard(card)) return { status, blocker: 'este card já é o ativo do projeto' };
+
+    const problem = this.cardTargetProblem(card, status);
+    if (problem !== null) return { status, blocker: problem };
+
+    return { status, blocker: null };
+  }
+
+  private projectForCard(card: BoardCard): ProjectStatus | null {
+    const leaf = repoLeaf(card.repo);
+    if (leaf === null) return null;
+
+    const name = normalizeProjectName(leaf);
+    const matches = this.projectStatuses.filter((status) => status.entry.name === name);
+    return matches.length === 1 ? matches[0] : null;
+  }
+
+  private cardTargetProblem(card: BoardCard, status: ProjectStatus): string | null {
+    if (status.declaredVault === null) return null;
+    return checkCardTarget(nodePath.resolve(this.absoluteVaultPath(card.path)), status.declaredVault);
+  }
+
+  private async activateCard(card: BoardCard, status: ProjectStatus): Promise<void> {
+    const replacesOther = status.currentCardName !== null && !this.isActiveCard(card);
+    if (replacesOther) {
+      const confirmed = await confirmDestructive(
+        this.app,
+        `Ativar ${card.basename} em ${status.entry.name}?`,
+        `O card ativo atual será substituído:\n${status.currentCardName}\n${status.currentCardPath ?? ''}`,
+        'Ativar',
+      );
+      if (!confirmed) return;
     }
+
+    const fresh = readState(status.statePath);
+    if (fresh.error !== null) {
+      new Notice(`${status.entry.name}: ${fresh.error}`, 8000);
+      return;
+    }
+    if (fresh.snapshot === null) {
+      new Notice(`${status.entry.name}: \`.agent_obsidian\` não existe mais`, 8000);
+      return;
+    }
+
+    const outcome = activateCurrentCard(
+      status.statePath,
+      fresh.snapshot,
+      { vaultPath: this.vaultBasePath, projectName: normalizeProjectName(status.entry.path) },
+      { name: card.basename, path: nodePath.resolve(this.absoluteVaultPath(card.path)) },
+    );
+    new Notice(`${status.entry.name}: ${outcome.message}`, outcome.kind === 'blocked' ? 8000 : 4000);
+    await this.refresh();
   }
 
   private branchOf(card: BoardCard): string {
@@ -1087,6 +1173,7 @@ function blockedStatus(
     currentCardName: null,
     currentCardPath: null,
     targetProblem: null,
+    declaredVault: null,
     snapshot,
   };
 }
@@ -1128,9 +1215,14 @@ async function openInSystem(target: string): Promise<void> {
   }
 }
 
-function confirmDestructive(app: App, title: string, body: string): Promise<boolean> {
+function confirmDestructive(
+  app: App,
+  title: string,
+  body: string,
+  confirmLabel = 'Limpar',
+): Promise<boolean> {
   return new Promise((resolve) => {
-    const modal = new ConfirmModal(app, title, body, resolve);
+    const modal = new ConfirmModal(app, title, body, confirmLabel, resolve);
     modal.open();
   });
 }
@@ -1138,13 +1230,21 @@ function confirmDestructive(app: App, title: string, body: string): Promise<bool
 class ConfirmModal extends Modal {
   private readonly title: string;
   private readonly body: string;
+  private readonly confirmLabel: string;
   private readonly resolve: (value: boolean) => void;
   private answered = false;
 
-  constructor(app: App, title: string, body: string, resolve: (value: boolean) => void) {
+  constructor(
+    app: App,
+    title: string,
+    body: string,
+    confirmLabel: string,
+    resolve: (value: boolean) => void,
+  ) {
     super(app);
     this.title = title;
     this.body = body;
+    this.confirmLabel = confirmLabel;
     this.resolve = resolve;
   }
 
@@ -1159,7 +1259,10 @@ class ConfirmModal extends Modal {
     const buttons = this.contentEl.createDiv({ cls: 'aob-modal-buttons' });
     const cancel = buttons.createEl('button', { cls: 'aob-button', text: 'Cancelar' });
     cancel.addEventListener('click', () => this.finish(false));
-    const confirm = buttons.createEl('button', { cls: 'aob-button is-danger', text: 'Limpar' });
+    const confirm = buttons.createEl('button', {
+      cls: 'aob-button is-danger',
+      text: this.confirmLabel,
+    });
     confirm.addEventListener('click', () => this.finish(true));
   }
 

@@ -16,6 +16,13 @@ export function normalizeRepo(raw: unknown): string | null {
   return parts.slice(-2).join('/').toLowerCase();
 }
 
+export function repoLeaf(raw: string | null): string | null {
+  if (raw === null) return null;
+
+  const leaf = raw.split('/').pop()?.trim() ?? '';
+  return leaf === '' ? null : leaf;
+}
+
 export function isSentinelRepo(raw: string): boolean {
   if (raw.trim() === '') return false;
   return normalizeRepo(raw) === null;
