@@ -45,16 +45,18 @@ import { parseActionSettings, type SettingsHost } from '../settings';
 import {
   CREATABLE_STATES,
   STATUS_BY_STATE,
+  WORK_TYPES,
   fillCardTemplate,
   sanitizeCardName,
+  templatePathForWorkType,
   todayIso,
+  type WorkType,
 } from '../shared/cardTemplate';
 
 declare const require: (id: string) => unknown;
 
 export const VIEW_TYPE_DASHBOARD = 'aob-dashboard';
 
-const TEMPLATE_PATH = 'templates/card template.md';
 const TEXT_FILTER_DEBOUNCE_MS = 150;
 
 type ViewMode = 'board' | 'list' | 'projects';
@@ -985,12 +987,17 @@ export class DashboardView extends ItemView {
   }
 
   private openCreateCardModal(): void {
-    new CreateCardModal(this.app, (title, state, feature) => {
-      void this.createCard(title, state, feature);
+    new CreateCardModal(this.app, (title, state, feature, workType) => {
+      void this.createCard(title, state, feature, workType);
     }).open();
   }
 
-  private async createCard(title: string, state: CardState, feature: string): Promise<void> {
+  private async createCard(
+    title: string,
+    state: CardState,
+    feature: string,
+    workType: WorkType,
+  ): Promise<void> {
     const name = sanitizeCardName(title);
     if (name === '') {
       new Notice('Informe um título para o card.');
@@ -1003,9 +1010,10 @@ export class DashboardView extends ItemView {
       return;
     }
 
-    const templateFile = this.app.vault.getAbstractFileByPath(TEMPLATE_PATH);
+    const templatePath = templatePathForWorkType(workType);
+    const templateFile = this.app.vault.getAbstractFileByPath(templatePath);
     if (!(templateFile instanceof TFile)) {
-      new Notice(`Template não encontrado: ${TEMPLATE_PATH}`);
+      new Notice(`Template não encontrado: ${templatePath}`);
       return;
     }
 
@@ -1168,12 +1176,21 @@ class ConfirmModal extends Modal {
 }
 
 class CreateCardModal extends Modal {
-  private readonly onSubmit: (title: string, state: CardState, feature: string) => void;
+  private readonly onSubmit: (
+    title: string,
+    state: CardState,
+    feature: string,
+    workType: WorkType,
+  ) => void;
   private titleValue = '';
   private stateValue: CardState = '1.not_started';
   private featureValue = '';
+  private workTypeValue: WorkType = 'implementation';
 
-  constructor(app: App, onSubmit: (title: string, state: CardState, feature: string) => void) {
+  constructor(
+    app: App,
+    onSubmit: (title: string, state: CardState, feature: string, workType: WorkType) => void,
+  ) {
     super(app);
     this.onSubmit = onSubmit;
   }
@@ -1182,7 +1199,7 @@ class CreateCardModal extends Modal {
     this.titleEl.setText('Novo card');
     this.contentEl.createEl('p', {
       cls: 'aob-hint',
-      text: 'O card nasce de `templates/card template.md`, com o frontmatter preenchido para a pasta escolhida.',
+      text: 'O card nasce de `templates/card/{tipo}.md`, com o frontmatter do template preservado e preenchido para a pasta escolhida.',
     });
 
     const titleField = this.contentEl.createDiv({ cls: 'aob-form-row' });
@@ -1206,6 +1223,17 @@ class CreateCardModal extends Modal {
       this.stateValue = stateSelect.value as CardState;
     });
 
+    const typeField = this.contentEl.createDiv({ cls: 'aob-form-row' });
+    typeField.createEl('label', { cls: 'aob-form-label', text: 'Tipo' });
+    const typeSelect = typeField.createEl('select', { cls: 'aob-select' });
+    for (const workType of WORK_TYPES) {
+      typeSelect.createEl('option', { value: workType, text: workType });
+    }
+    typeSelect.value = this.workTypeValue;
+    typeSelect.addEventListener('change', () => {
+      this.workTypeValue = typeSelect.value as WorkType;
+    });
+
     const featureField = this.contentEl.createDiv({ cls: 'aob-form-row' });
     featureField.createEl('label', { cls: 'aob-form-label', text: 'Feature (opcional)' });
     const featureInput = featureField.createEl('input', {
@@ -1219,7 +1247,7 @@ class CreateCardModal extends Modal {
     });
 
     const submit = (): void => {
-      this.onSubmit(this.titleValue, this.stateValue, this.featureValue);
+      this.onSubmit(this.titleValue, this.stateValue, this.featureValue, this.workTypeValue);
       this.close();
     };
 

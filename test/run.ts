@@ -4,7 +4,7 @@ import { countTasks, extractLinks, extractSection, isEmptySection } from '../src
 import { parseDateValue, parseDateMap, sortWithEmptyLast } from '../src/shared/dates';
 import { validateCard } from '../src/shared/validation';
 import { DATE_FIELDS, type BoardCard } from '../src/shared/types';
-import { fillCardTemplate, sanitizeCardName } from '../src/shared/cardTemplate';
+import { fillCardTemplate, sanitizeCardName, templatePathForWorkType } from '../src/shared/cardTemplate';
 import { isDivergent, normalizeStatus } from '../src/shared/status';
 import { normalizeRepo } from '../src/shared/repo';
 import { normalizeFeature } from '../src/shared/features';
@@ -457,9 +457,17 @@ equal('nome de card vazio', sanitizeCardName('   '), '');
 const templateText = [
   '---',
   'repo:',
+  'branch:',
+  'work_type: implementation',
   'status:',
   '  - Not Started',
   'feature:',
+  'created:',
+  'started:',
+  'reviewed:',
+  'completed:',
+  'depends_on:',
+  'dependents:',
   '---',
   '',
   '### Descrição',
@@ -472,12 +480,47 @@ const filled = fillCardTemplate(templateText, {
   feature: 'dashboard-obsidian',
   created: '2026-10-30',
 });
-check('frontmatter preenchido tem status', filled.includes('status: In Progress'));
-check('frontmatter preenchido tem feature', filled.includes('feature: dashboard-obsidian'));
-check('frontmatter preenchido tem created', filled.includes('created: 2026-10-30'));
-check('lista de status do template foi substituída', !filled.includes('- Not Started'));
-check('corpo do template preservado', filled.includes('### Descrição'));
+const filledFrontmatter = /^---\n([\s\S]*?)\n---/.exec(filled)?.[1] ?? '';
+const filledKeys = filledFrontmatter
+  .split('\n')
+  .map((line) => /^([A-Za-z_][A-Za-z0-9_]*):/.exec(line)?.[1])
+  .filter((key): key is string => key !== undefined);
+
+check('status vira lista com o valor da pasta', filledFrontmatter.includes('status:\n  - In Progress'));
+check('feature preenchida', filledFrontmatter.includes('feature: dashboard-obsidian'));
+check('created preenchido', filledFrontmatter.includes('created: 2026-10-30'));
 check('frontmatter começa com repo vazio', filled.startsWith('---\nrepo: \n'), filled.slice(0, 20));
+check('work_type vem do template', filledFrontmatter.includes('work_type: implementation'));
+check('depends_on do template preservado', filledFrontmatter.includes('depends_on:'));
+check('dependents do template preservado', filledFrontmatter.includes('dependents:'));
+check('nenhuma chave criada no frontmatter', !filledFrontmatter.includes('pr_url'));
+equal('ordem das chaves do template preservada', filledKeys, [
+  'repo',
+  'branch',
+  'work_type',
+  'status',
+  'feature',
+  'created',
+  'started',
+  'reviewed',
+  'completed',
+  'depends_on',
+  'dependents',
+]);
+check('corpo do template preservado', filled.includes('### Descrição') && filled.includes('texto'));
+equal('template sem frontmatter volta intacto', fillCardTemplate('# só corpo', {
+  repo: '',
+  branch: '',
+  status: 'Not Started',
+  feature: '',
+  created: '2026-10-30',
+}), '# só corpo');
+equal('caminho do template por tipo', templatePathForWorkType('epic'), 'templates/card/epic.md');
+equal(
+  'caminho do template de investigação',
+  templatePathForWorkType('investigation'),
+  'templates/card/investigation.md',
+);
 
 const tempDir = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'aob-state-'));const stateFile = nodePath.join(tempDir, '.agent_obsidian');
 const stateContext = { vaultPath: VAULT, projectName: 'proj' };
