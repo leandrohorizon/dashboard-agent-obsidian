@@ -419,6 +419,11 @@ export class DashboardView extends ItemView {
     });
 
     const states = bar.createDiv({ cls: 'aob-states' });
+
+    const allStates = states.createEl('button', { cls: 'aob-states-action', text: 'todos' });
+    allStates.setAttribute('aria-label', 'Selecionar todos os estados');
+    allStates.addEventListener('click', () => this.selectAllStates());
+
     for (const state of this.scan.existingStates) {
       const chip = states.createEl('button', {
         cls: this.filterStates.has(state) ? 'aob-chip is-active' : 'aob-chip',
@@ -430,6 +435,10 @@ export class DashboardView extends ItemView {
         this.render();
       });
     }
+
+    const noStates = states.createEl('button', { cls: 'aob-states-action', text: 'limpar' });
+    noStates.setAttribute('aria-label', 'Limpar a seleção de estados');
+    noStates.addEventListener('click', () => this.clearStateFilter());
 
     this.renderSelect(bar, 'Ordenar por', (Object.keys(SORT_LABELS) as SortField[]).map((field) => ({
       value: field,
@@ -490,6 +499,17 @@ export class DashboardView extends ItemView {
     if (this.textFilterHandle === null) return;
     window.clearTimeout(this.textFilterHandle);
     this.textFilterHandle = null;
+  }
+
+  private selectAllStates(): void {
+    if (this.scan === null) return;
+    this.filterStates = new Set(this.scan.existingStates);
+    this.render();
+  }
+
+  private clearStateFilter(): void {
+    this.filterStates = new Set();
+    this.render();
   }
 
   private visibleCards(): BoardCard[] {
@@ -561,6 +581,15 @@ export class DashboardView extends ItemView {
   private renderKanban(parent: HTMLElement): void {
     if (this.scan === null) return;
     const cards = this.visibleCards();
+
+    if (this.filterStates.size === 0) {
+      parent.createDiv({
+        cls: 'aob-empty',
+        text: 'nenhum estado selecionado — use "todos" ou clique em um estado',
+      });
+      return;
+    }
+
     const board = parent.createDiv({ cls: 'aob-kanban' });
 
     for (const state of this.scan.existingStates) {
@@ -647,7 +676,13 @@ export class DashboardView extends ItemView {
       });
     }
 
-    if (cards.length === 0) parent.createDiv({ cls: 'aob-empty', text: 'nenhum card com esses filtros' });
+    if (cards.length === 0) {
+      const text =
+        this.filterStates.size === 0
+          ? 'nenhum estado selecionado — use "todos" ou clique em um estado'
+          : 'nenhum card com esses filtros';
+      parent.createDiv({ cls: 'aob-empty', text });
+    }
   }
 
   private renderDetail(parent: HTMLElement): void {

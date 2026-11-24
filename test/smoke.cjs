@@ -814,6 +814,34 @@ async function main() {
     inactive.click();
   }
 
+  const baseTilesBeforeStates = view.contentEl.querySelectorAll('.aob-card').length;
+
+  const stateActions = [...view.contentEl.querySelectorAll('.aob-states-action')].map(
+    (button) => button.textContent,
+  );
+  check('ações de estado existem', stateActions.includes('todos') && stateActions.includes('limpar'), JSON.stringify(stateActions));
+
+  const clickStateAction = (label) => {
+    [...view.contentEl.querySelectorAll('.aob-states-action')]
+      .find((button) => button.textContent === label)
+      .click();
+  };
+
+  clickStateAction('limpar');
+  check(
+    'limpar estados esvazia o kanban com aviso',
+    view.contentEl.querySelectorAll('.aob-card').length === 0 &&
+      view.contentEl.textContent.includes('nenhum estado selecionado'),
+    `${view.contentEl.querySelectorAll('.aob-card').length}`,
+  );
+
+  clickStateAction('todos');
+  equal(
+    'todos restaura os cards do kanban',
+    view.contentEl.querySelectorAll('.aob-card').length,
+    baseTilesBeforeStates,
+  );
+
   const notifierButton = activateFor('Sistema de regras mais robusto');
   check(
     'ativar habilitado quando o projeto tem state e a pasta não casa com o repo',
