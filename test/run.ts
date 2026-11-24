@@ -22,6 +22,7 @@ import {
   resolveProjectKey,
 } from '../src/shared/paths';
 import { discoverProjects, type FsProbe } from '../src/projects/registry';
+import { readRepoSlug } from '../src/projects/remotes';
 import { parseCardRefs } from '../src/shared/cardRefs';
 import * as nodeFs from 'fs';
 import * as nodeOs from 'os';
@@ -641,6 +642,49 @@ equal(
 );
 
 nodeFs.rmSync(tempDir, { recursive: true, force: true });
+
+const remotesDir = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'aob-remote-'));
+const projectWithGit = nodePath.join(remotesDir, 'projeto');
+nodeFs.mkdirSync(nodePath.join(projectWithGit, '.git'), { recursive: true });
+nodeFs.writeFileSync(
+  nodePath.join(projectWithGit, '.git', 'config'),
+  ['[core]', '\trepositoryformatversion = 0', '[remote "origin"]', '\turl = git@github.com:org/app.nome_estranho.git', '\tfetch = +refs/heads/*:refs/remotes/origin/*'].join('\n'),
+  'utf8',
+);
+equal('remote do projeto vira slug normalizado', readRepoSlug(projectWithGit), 'org/app.nome_estranho');
+
+const projectWithoutOrigin = nodePath.join(remotesDir, 'sem-origin');
+nodeFs.mkdirSync(nodePath.join(projectWithoutOrigin, '.git'), { recursive: true });
+nodeFs.writeFileSync(
+  nodePath.join(projectWithoutOrigin, '.git', 'config'),
+  ['[remote "upstream"]', '\turl = https://github.com/outra/repo.git'].join('\n'),
+  'utf8',
+);
+equal('remote sem origin usa o primeiro', readRepoSlug(projectWithoutOrigin), 'outra/repo');
+
+const projectWithGitFile = nodePath.join(remotesDir, 'worktree');
+const gitDirTarget = nodePath.join(remotesDir, 'gitdir-alvo');
+nodeFs.mkdirSync(projectWithGitFile, { recursive: true });
+nodeFs.mkdirSync(gitDirTarget, { recursive: true });
+nodeFs.writeFileSync(
+  nodePath.join(projectWithGitFile, '.git'),
+  `gitdir: ${gitDirTarget}\n`,
+  'utf8',
+);
+nodeFs.writeFileSync(
+  nodePath.join(gitDirTarget, 'config'),
+  ['[remote "origin"]', '\turl = git@github.com:org/worktree-repo.git'].join('\n'),
+  'utf8',
+);
+equal('worktree usa o gitdir apontado', readRepoSlug(projectWithGitFile), 'org/worktree-repo');
+
+equal(
+  'projeto sem .git não tem remote',
+  readRepoSlug(nodePath.join(remotesDir, 'inexistente')),
+  null,
+);
+
+nodeFs.rmSync(remotesDir, { recursive: true, force: true });
 
 const total = passed + failures.length;
 if (failures.length > 0) {

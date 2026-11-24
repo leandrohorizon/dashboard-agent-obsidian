@@ -33,6 +33,7 @@ import {
   type BoardScan,
 } from '../board/index';
 import { discoverProjects, type FsProbe, type ProjectEntry, type RegistryResult } from '../projects/registry';
+import { readRepoSlug } from '../projects/remotes';
 import { expandHome, isPathInside, normalizeProjectName, toPosix } from '../shared/paths';
 import { repoLeaf } from '../shared/repo';
 import { evaluateAgentState, readCurrentCard } from '../shared/state';
@@ -103,6 +104,7 @@ export class DashboardView extends ItemView {
   private scan: BoardScan | null = null;
   private registry: RegistryResult | null = null;
   private projectStatuses: ProjectStatus[] = [];
+  private projectRemotes = new Map<string, string | null>();
   private mode: ViewMode = 'board';
   private loading = false;
   private fatalError: string | null = null;
@@ -194,6 +196,9 @@ export class DashboardView extends ItemView {
         },
       );
       this.projectStatuses = this.registry.projects.map((entry) => this.inspectProject(entry));
+      this.projectRemotes = new Map(
+        this.projectStatuses.map((status) => [status.entry.key, readRepoSlug(status.entry.path)]),
+      );
       this.activeCardPaths = this.collectActiveCardPaths();
       this.lastScanAt = new Date();
 
@@ -801,7 +806,7 @@ export class DashboardView extends ItemView {
       return {
         status,
         blocker:
-          'projeto do card não está entre os registrados: a pasta precisa ter `.agent_obsidian` (rode /init-agent-state nela) e o nome da pasta precisa casar com o repositório',
+          'projeto do card não está entre os registrados: a pasta precisa ter `.agent_obsidian` (rode /init-agent-state nela) e o repositório dela precisa ser o do card',
       };
     }
     if (status.snapshot === null) return { status, blocker: 'projeto sem `.agent_obsidian`' };
@@ -816,12 +821,23 @@ export class DashboardView extends ItemView {
   }
 
   private projectForCard(card: BoardCard): ProjectStatus | null {
-    const leaf = repoLeaf(card.repo);
-    if (leaf === null) return null;
+    const byRepo =
+      card.repo === null
+        ? []
+        : this.projectStatuses.filter(
+            (status) => this.projectRemotes.get(status.entry.key) === card.repo,
+          );
+    const candidates = byRepo.length > 0 ? byRepo : this.projectStatuses;
 
-    const name = normalizeProjectName(leaf);
-    const matches = this.projectStatuses.filter((status) => status.entry.name === name);
-    return matches.length === 1 ? matches[0] : null;
+    const leaf = repoLeaf(card.repo);
+    if (leaf !== null) {
+      const name = normalizeProjectName(leaf);
+      const byName = candidates.filter((status) => status.entry.name === name);
+      if (byName.length === 1) return byName[0];
+      if (byName.length > 1) return null;
+    }
+
+    return candidates.length === 1 ? candidates[0] : null;
   }
 
   private cardTargetProblem(card: BoardCard, status: ProjectStatus): string | null {

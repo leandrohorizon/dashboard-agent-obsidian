@@ -81,8 +81,11 @@ Placeholders disponíveis: `{{path}}`, `{{name}}`, `{{link}}`, `{{wikilink}}`,
 ## Ativar card
 
 No detalhe do card, **Ativar neste projeto** grava `current_card` no
-`.agent_obsidian` do projeto dono. O projeto é resolvido pelo nome do
-repositório do card (`repo:` do frontmatter) entre os projetos registrados.
+`.agent_obsidian` do projeto dono. O projeto é resolvido pelo repositório: o
+remote do `.git/config` de cada projeto registrado é normalizado e comparado com
+o `repo:` do card; quando mais de um projeto aponta para o mesmo remote, o nome
+da pasta decide. Sem remote legível, a resolução cai para o nome do repositório
+do card comparado ao nome da pasta.
 
 O botão fica desabilitado, com o motivo visível, quando o card não tem `repo:`,
 o projeto não está entre os registrados, o state precisa de reparo ou está
