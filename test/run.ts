@@ -29,6 +29,7 @@ import * as nodeOs from 'os';
 import {
   activateCurrentCard,
   clearCurrentCard,
+  initializeStateFile,
   readState,
   repairStateFile,
   writeWithConcurrencyCheck,
@@ -623,14 +624,19 @@ equal(
 nodeFs.writeFileSync(stateFile, JSON.stringify({ version: '1.0' }), 'utf8');
 const repairActivationSnapshot = readState(stateFile).snapshot;
 equal(
-  'ativar bloqueado quando o state precisa de reparo',
+  'ativar grava em state que precisa de reparo sem reescrever os outros campos',
   repairActivationSnapshot === null
     ? 'sem snapshot'
     : activateCurrentCard(stateFile, repairActivationSnapshot, stateContext, {
         name: 'x',
         path: 'C:/board/x.md',
       }).kind,
-  'blocked',
+  'ok',
+);
+equal(
+  'ativar não repara o state',
+  JSON.parse(nodeFs.readFileSync(stateFile, 'utf8')).version,
+  '1.0',
 );
 
 nodeFs.writeFileSync(stateFile, JSON.stringify({ version: '3.0' }), 'utf8');
@@ -642,6 +648,36 @@ equal(
 );
 
 nodeFs.rmSync(tempDir, { recursive: true, force: true });
+
+const initDir = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'aob-init-'));
+const initFile = nodePath.join(initDir, '.agent_obsidian');
+equal(
+  'inicializa o state do projeto',
+  initializeStateFile(initFile, stateContext, {
+    name: 'card novo',
+    path: 'C:/board/card novo.md',
+  }).kind,
+  'ok',
+);
+const initialized = JSON.parse(nodeFs.readFileSync(initFile, 'utf8'));
+equal('state criado tem version 2.0', initialized.version, '2.0');
+equal('state criado aponta guidelines', initialized.guidelines_path, guidelines);
+equal('state criado aponta memória', initialized.condensed_memory_path, memoryPath);
+equal('state criado já ativa o card', initialized.current_card, {
+  name: 'card novo',
+  path: 'C:/board/card novo.md',
+});
+equal(
+  'não sobrescreve state existente',
+  initializeStateFile(initFile, stateContext, { name: 'outro card', path: 'C:/board/outro.md' }).kind,
+  'blocked',
+);
+equal(
+  'state existente fica intocado',
+  JSON.parse(nodeFs.readFileSync(initFile, 'utf8')).current_card.name,
+  'card novo',
+);
+nodeFs.rmSync(initDir, { recursive: true, force: true });
 
 const remotesDir = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'aob-remote-'));
 const projectWithGit = nodePath.join(remotesDir, 'projeto');

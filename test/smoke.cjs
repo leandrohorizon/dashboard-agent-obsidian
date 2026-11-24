@@ -793,6 +793,15 @@ async function main() {
     }
   }
 
+  const activateFor = (title) => {
+    const tile = [...view.contentEl.querySelectorAll('.aob-card')].find(
+      (element) => element.querySelector('.aob-card-title')?.textContent === title,
+    );
+    if (tile === undefined) return null;
+    tile.click();
+    return view.contentEl.querySelector('.aob-activate');
+  };
+
   const kanbanTab = [...view.contentEl.querySelectorAll('.aob-tab')].find(
     (button) => button.textContent === 'Kanban',
   );
@@ -804,6 +813,20 @@ async function main() {
     if (inactive === undefined) break;
     inactive.click();
   }
+
+  const notifierButton = activateFor('Sistema de regras mais robusto');
+  check(
+    'ativar habilitado quando o projeto tem state e a pasta não casa com o repo',
+    notifierButton !== null && !notifierButton.disabled,
+    notifierButton === null ? 'sem botão' : notifierButton.getAttribute('title') ?? 'habilitado',
+  );
+
+  const cofferButton = activateFor('Ajuda contextual em cada item do dashboard');
+  check(
+    'ativar habilitado por fallback quando a pasta ainda não tem state',
+    cofferButton !== null && !cofferButton.disabled,
+    cofferButton === null ? 'sem botão' : cofferButton.getAttribute('title') ?? 'habilitado',
+  );
 
   const perfFolder = vaultData.folders.get('board/2.in_progress');
   const baseTiles = view.contentEl.querySelectorAll('.aob-card').length;

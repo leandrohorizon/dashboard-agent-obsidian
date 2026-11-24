@@ -34,12 +34,13 @@ import {
 } from '../board/index';
 import { discoverProjects, type FsProbe, type ProjectEntry, type RegistryResult } from '../projects/registry';
 import { readRepoSlug } from '../projects/remotes';
-import { expandHome, isPathInside, normalizeProjectName, toPosix } from '../shared/paths';
+import { expandHome, isPathInside, normalizeProjectName, resolveProjectKey, toPosix } from '../shared/paths';
 import { repoLeaf } from '../shared/repo';
 import { evaluateAgentState, readCurrentCard } from '../shared/state';
 import {
   activateCurrentCard,
   clearCurrentCard,
+  initializeStateFile,
   readState,
   repairStateFile,
   type StateSnapshot,
@@ -80,6 +81,16 @@ interface ProjectStatus {
   snapshot: StateSnapshot | null;
 }
 
+interface ProjectCandidate {
+  path: string;
+  name: string;
+  slug: string | null;
+}
+
+type ActivationTarget =
+  | { kind: 'existing'; status: ProjectStatus }
+  | { kind: 'bootstrap'; candidate: ProjectCandidate };
+
 const SINCE_LABELS: Record<SinceField, string> = {
   mtime: 'modificado desde',
   created: 'criado desde',
@@ -105,6 +116,7 @@ export class DashboardView extends ItemView {
   private registry: RegistryResult | null = null;
   private projectStatuses: ProjectStatus[] = [];
   private projectRemotes = new Map<string, string | null>();
+  private projectCandidates: ProjectCandidate[] = [];
   private mode: ViewMode = 'board';
   private loading = false;
   private fatalError: string | null = null;
@@ -199,6 +211,7 @@ export class DashboardView extends ItemView {
       this.projectRemotes = new Map(
         this.projectStatuses.map((status) => [status.entry.key, readRepoSlug(status.entry.path)]),
       );
+      this.projectCandidates = this.buildProjectCandidates();
       this.activeCardPaths = this.collectActiveCardPaths();
       this.lastScanAt = new Date();
 
@@ -787,37 +800,54 @@ export class DashboardView extends ItemView {
       text: 'Ativar neste projeto',
     });
 
-    if (activation.blocker !== null || activation.status === null) {
+    if (activation.target === null) {
       button.disabled = true;
-      if (activation.blocker !== null) button.setAttribute('title', activation.blocker);
-      parent.createDiv({ cls: 'aob-hint', text: activation.blocker ?? '' });
+      if (activation.blocker !== null) {
+        button.setAttribute('title', activation.blocker);
+        parent.createDiv({ cls: 'aob-hint', text: activation.blocker });
+      }
       return;
     }
 
-    const status = activation.status;
-    button.addEventListener('click', () => void this.activateCard(card, status));
+    const target = activation.target;
+    button.addEventListener('click', () => void this.activateCard(card, target));
   }
 
-  private activationFor(card: BoardCard): { status: ProjectStatus | null; blocker: string | null } {
-    const status = this.projectForCard(card);
+  private activationFor(card: BoardCard): { target: ActivationTarget | null; blocker: string | null } {
+    if (card.repo === null) {
+      return { target: null, blocker: 'card sem `repo:`: não há projeto para ativar' };
+    }
 
-    if (card.repo === null) return { status, blocker: 'card sem `repo:`: não há projeto para ativar' };
-    if (status === null) {
+    const status = this.projectForCard(card);
+    if (status !== null) {
+      if (status.snapshot === null) return { target: null, blocker: 'projeto sem `.agent_obsidian`' };
+      if (status.verdict === 'blocked') return { target: null, blocker: status.message };
+      if (this.isActiveCard(card)) {
+        return { target: null, blocker: 'este card já é o ativo do projeto' };
+      }
+
+      const problem = this.cardTargetProblem(card, status);
+      if (problem !== null) return { target: null, blocker: problem };
+
+      return { target: { kind: 'existing', status }, blocker: null };
+    }
+
+    const candidate = this.fallbackFor(card);
+    if (candidate === null) {
       return {
-        status,
+        target: null,
         blocker:
-          'projeto do card não está entre os registrados: a pasta precisa ter `.agent_obsidian` (rode /init-agent-state nela) e o repositório dela precisa ser o do card',
+          'nenhum projeto registrado nem pasta sob as raízes tem este repositório: confira o `repo:` do card e as raízes nas settings',
       };
     }
-    if (status.snapshot === null) return { status, blocker: 'projeto sem `.agent_obsidian`' };
-    if (status.verdict === 'blocked') return { status, blocker: status.message };
-    if (status.verdict === 'repair') return { status, blocker: 'o state precisa de reparo antes de ativar' };
-    if (this.isActiveCard(card)) return { status, blocker: 'este card já é o ativo do projeto' };
 
-    const problem = this.cardTargetProblem(card, status);
-    if (problem !== null) return { status, blocker: problem };
+    const problem = checkCardTarget(
+      nodePath.resolve(this.absoluteVaultPath(card.path)),
+      this.vaultBasePath,
+    );
+    if (problem !== null) return { target: null, blocker: problem };
 
-    return { status, blocker: null };
+    return { target: { kind: 'bootstrap', candidate }, blocker: null };
   }
 
   private projectForCard(card: BoardCard): ProjectStatus | null {
@@ -840,12 +870,71 @@ export class DashboardView extends ItemView {
     return candidates.length === 1 ? candidates[0] : null;
   }
 
+  private fallbackFor(card: BoardCard): ProjectCandidate | null {
+    if (card.repo === null) return null;
+
+    const byRepo = this.projectCandidates.filter((candidate) => candidate.slug === card.repo);
+    if (byRepo.length === 1) return byRepo[0];
+    if (byRepo.length === 0) return null;
+
+    const leaf = repoLeaf(card.repo);
+    if (leaf === null) return null;
+    const name = normalizeProjectName(leaf);
+    const byName = byRepo.filter((candidate) => candidate.name === name);
+    return byName.length === 1 ? byName[0] : null;
+  }
+
+  private buildProjectCandidates(): ProjectCandidate[] {
+    const home = process.env.USERPROFILE ?? os.homedir();
+    const excluded = new Set(
+      this.host.settings.excludedPaths
+        .map((entry) => entry.trim())
+        .filter((entry) => entry !== '')
+        .map((entry) => resolveProjectKey(expandHome(entry, home))),
+    );
+    const directories = new Set<string>();
+
+    for (const rawRoot of this.host.settings.roots) {
+      if (rawRoot.trim() === '') continue;
+      const root = nodePath.resolve(expandHome(rawRoot, home));
+      if (probePath(root) !== 'dir') continue;
+
+      let entries: string[];
+      try {
+        entries = listDirectories(root);
+      } catch {
+        continue;
+      }
+      for (const name of entries) {
+        if (name.startsWith('.') || name === 'node_modules') continue;
+        const child = nodePath.join(root, name);
+        if (probePath(child) === 'dir') directories.add(child);
+      }
+    }
+
+    for (const rawManual of this.host.settings.extraProjects) {
+      if (rawManual.trim() === '') continue;
+      directories.add(nodePath.resolve(expandHome(rawManual, home)));
+    }
+
+    return [...directories]
+      .filter((path) => !excluded.has(resolveProjectKey(path)))
+      .filter((path) => probePath(nodePath.join(path, '.agent_obsidian')) !== 'file')
+      .map((path) => ({ path, name: normalizeProjectName(path), slug: readRepoSlug(path) }));
+  }
+
   private cardTargetProblem(card: BoardCard, status: ProjectStatus): string | null {
     if (status.declaredVault === null) return null;
     return checkCardTarget(nodePath.resolve(this.absoluteVaultPath(card.path)), status.declaredVault);
   }
 
-  private async activateCard(card: BoardCard, status: ProjectStatus): Promise<void> {
+  private async activateCard(card: BoardCard, target: ActivationTarget): Promise<void> {
+    if (target.kind === 'bootstrap') {
+      await this.activateInNewProject(card, target.candidate);
+      return;
+    }
+
+    const status = target.status;
     const replacesOther = status.currentCardName !== null && !this.isActiveCard(card);
     if (replacesOther) {
       const confirmed = await confirmDestructive(
@@ -874,6 +963,25 @@ export class DashboardView extends ItemView {
       { name: card.basename, path: nodePath.resolve(this.absoluteVaultPath(card.path)) },
     );
     new Notice(`${status.entry.name}: ${outcome.message}`, outcome.kind === 'blocked' ? 8000 : 4000);
+    await this.refresh();
+  }
+
+  private async activateInNewProject(card: BoardCard, candidate: ProjectCandidate): Promise<void> {
+    const statePath = nodePath.join(candidate.path, '.agent_obsidian');
+    const confirmed = await confirmDestructive(
+      this.app,
+      `Ativar ${card.basename} em ${candidate.name}?`,
+      `O projeto ainda não tem \`.agent_obsidian\`. Ele será criado em:\n${statePath}\n\ncom este card já como ativo.`,
+      'Criar e ativar',
+    );
+    if (!confirmed) return;
+
+    const outcome = initializeStateFile(
+      statePath,
+      { vaultPath: this.vaultBasePath, projectName: candidate.name },
+      { name: card.basename, path: nodePath.resolve(this.absoluteVaultPath(card.path)) },
+    );
+    new Notice(`${candidate.name}: ${outcome.message}`, outcome.kind === 'blocked' ? 8000 : 4000);
     await this.refresh();
   }
 

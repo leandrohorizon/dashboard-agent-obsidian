@@ -88,6 +88,14 @@ da pasta decide. Sem remote legível, a resolução cai para o nome do repositó
 do card comparado ao nome da pasta.
 
 O botão fica desabilitado, com o motivo visível, quando o card não tem `repo:`,
-o projeto não está entre os registrados, o state precisa de reparo ou está
-bloqueado, o card já é o ativo, ou o caminho do card cai fora do board do vault
-declarado no state.
+nenhuma pasta com esse repositório é encontrada, o state é JSON inválido ou de
+versão futura, o card já é o ativo, ou o caminho do card cai fora do board do
+vault declarado no state.
+
+Quando o repositório do card não casa com nenhum projeto registrado, o plugin
+procura sob as raízes configuradas uma pasta cujo remote seja o do card e oferece
+**criar** o `.agent_obsidian` ali, com confirmação, já com o card ativo.
+
+Ativar grava **somente** `current_card`: os outros campos são preservados como
+estão, inclusive quando o painel de Projetos sinaliza que o state precisa de
+reparo — reparo é ação própria, não efeito colateral de ativar.
