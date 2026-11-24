@@ -420,6 +420,7 @@ async function main() {
   const leaf = new WorkspaceLeaf(app);
   const view = registered['aob-dashboard'](leaf);
   await view.onOpen();
+  document.body.appendChild(view.containerEl);
 
   const stateFolders = fs
     .readdirSync(path.join(VAULT, 'board'), { withFileTypes: true })
@@ -565,6 +566,118 @@ async function main() {
   listTab.click();
   equal('lista mostra os mesmos cards', view.contentEl.querySelectorAll('.aob-table tbody tr').length, kanbanBefore);
 
+  const searchBox = () => view.contentEl.querySelector('.aob-filters input[type="search"]');
+  const rowCount = () => view.contentEl.querySelectorAll('.aob-table tbody tr').length;
+  const flushSearch = () => new Promise((resolve) => window.setTimeout(resolve, 260));
+  const typeSearch = (input, value) => {
+    input.value = value;
+    input.dispatchEvent(new window.Event('input'));
+  };
+
+  const searchInput = searchBox();
+  check('campo de busca existe', searchInput !== null);
+  searchInput.focus();
+  check('campo de busca recebe foco', document.activeElement === searchInput);
+
+  typeSearch(searchInput, 'zzzz');
+  await flushSearch();
+  equal('busca sem correspondência esvazia a lista', rowCount(), 0);
+  check('busca mantém o foco depois de filtrar', document.activeElement === searchInput);
+  equal('busca não recria o input', searchBox(), searchInput);
+
+  typeSearch(searchInput, '');
+  await flushSearch();
+  equal('limpar a busca restaura a lista', rowCount(), kanbanBefore);
+
+  typeSearch(searchInput, 'memoria');
+  await flushSearch();
+  const rowsWithSearch = rowCount();
+  check('busca existente encontra cards', rowsWithSearch > 0, `${rowsWithSearch}`);
+  check('busca de palavra inteira mantém o foco', document.activeElement === searchInput);
+
+  searchInput.value = 'memXoria';
+  searchInput.setSelectionRange(4, 4);
+  searchInput.dispatchEvent(new window.Event('input'));
+  await flushSearch();
+  equal('edição no meio do texto mantém o valor digitado', searchInput.value, 'memXoria');
+  equal('edição no meio do texto mantém o cursor', searchInput.selectionStart, 4);
+  equal('edição no meio do texto mantém o fim da seleção', searchInput.selectionEnd, 4);
+  check('edição no meio do texto mantém o foco', document.activeElement === searchInput);
+  equal('texto editado é aplicado ao filtro', rowCount(), 0);
+
+  typeSearch(searchInput, 'memoria');
+  await flushSearch();
+
+  const stateChip = [...view.contentEl.querySelectorAll('.aob-chip')].find(
+    (element) => element.textContent === '1.not_started',
+  );
+  stateChip.click();
+  equal('busca preservada ao mexer no filtro de estado', searchBox().value, 'memoria');
+  const statesAfterChip = [...view.contentEl.querySelectorAll('.aob-table tbody tr')].map(
+    (row) => row.children[2].textContent,
+  );
+  check(
+    'busca compõe com o filtro de estado',
+    statesAfterChip.every((state) => state !== '1.not_started'),
+    JSON.stringify(statesAfterChip),
+  );
+  [...view.contentEl.querySelectorAll('.aob-chip')]
+    .find((element) => element.textContent === '1.not_started')
+    .click();
+
+  const selectFor = (label) => {
+    const field = [...view.contentEl.querySelectorAll('.aob-field')].find(
+      (element) => element.querySelector('.aob-field-label')?.textContent === label,
+    );
+    return field ? field.querySelector('select') : null;
+  };
+
+  const projectSelect = selectFor('Projeto');
+  check('filtro de projeto existe', projectSelect !== null);
+  projectSelect.value = '__none__';
+  projectSelect.dispatchEvent(new window.Event('change'));
+  equal('busca preservada ao mexer no filtro de projeto', searchBox().value, 'memoria');
+  const projectsAfterFilter = [...view.contentEl.querySelectorAll('.aob-table tbody tr')].map(
+    (row) => row.children[1].textContent,
+  );
+  check(
+    'busca compõe com o filtro de projeto',
+    projectsAfterFilter.every((project) => project === '—'),
+    JSON.stringify(projectsAfterFilter),
+  );
+  selectFor('Projeto').value = '';
+  selectFor('Projeto').dispatchEvent(new window.Event('change'));
+
+  const sortSelect = selectFor('Ordenar por');
+  check('filtro de ordenação existe', sortSelect !== null);
+  sortSelect.value = 'title';
+  sortSelect.dispatchEvent(new window.Event('change'));
+  equal('busca preservada ao trocar a ordenação', searchBox().value, 'memoria');
+  const titlesSorted = [...view.contentEl.querySelectorAll('.aob-table tbody tr')].map(
+    (row) => row.children[0].textContent,
+  );
+  const descending = [...titlesSorted].sort((left, right) => right.localeCompare(left));
+  check(
+    'ordenação por título aplicada com busca ativa',
+    JSON.stringify(titlesSorted) === JSON.stringify(descending),
+    `obtido ${JSON.stringify(titlesSorted)} vs esperado ${JSON.stringify(descending)}`,
+  );
+  selectFor('Ordenar por').value = 'mtime';
+  selectFor('Ordenar por').dispatchEvent(new window.Event('change'));
+
+  const sinceInput = view.contentEl.querySelector('.aob-since input[type="date"]');
+  check('filtro de data existe', sinceInput !== null);
+  sinceInput.value = '2020-01-01';
+  sinceInput.dispatchEvent(new window.Event('change'));
+  equal('busca preservada ao mexer no filtro de data', searchBox().value, 'memoria');
+  check('filtro de data mantém a busca aplicada', rowCount() <= rowsWithSearch, `${rowCount()} vs ${rowsWithSearch}`);
+  view.contentEl.querySelector('.aob-since input[type="date"]').value = '';
+  view.contentEl.querySelector('.aob-since input[type="date"]').dispatchEvent(new window.Event('change'));
+
+  typeSearch(searchBox(), '');
+  await flushSearch();
+  equal('lista volta ao total depois de limpar a busca', rowCount(), kanbanBefore);
+
   const pendingFilter = [...view.contentEl.querySelectorAll('.aob-check input')][0];
   pendingFilter.checked = true;
   pendingFilter.dispatchEvent(new window.Event('change'));
@@ -670,6 +783,57 @@ async function main() {
       );
     }
   }
+
+  const kanbanTab = [...view.contentEl.querySelectorAll('.aob-tab')].find(
+    (button) => button.textContent === 'Kanban',
+  );
+  if (kanbanTab && !kanbanTab.classList.contains('is-active')) kanbanTab.click();
+  for (;;) {
+    const inactive = [...view.contentEl.querySelectorAll('.aob-chip')].find(
+      (chip) => !chip.classList.contains('is-active'),
+    );
+    if (inactive === undefined) break;
+    inactive.click();
+  }
+
+  const perfFolder = vaultData.folders.get('board/2.in_progress');
+  const baseTiles = view.contentEl.querySelectorAll('.aob-card').length;
+  const syntheticFiles = [];
+  for (let index = 0; index < 500; index += 1) {
+    const relativePath = `board/2.in_progress/card sintetico ${index}.md`;
+    const file = new TFile(relativePath, { mtime: Date.now(), ctime: 0, size: 10, type: 'file' });
+    vaultData.byPath.set(relativePath, file);
+    perfFolder.children.push(file);
+    syntheticFiles.push(file);
+  }
+  await view.refresh();
+  equal(
+    'board sintético entra no kanban',
+    view.contentEl.querySelectorAll('.aob-card').length,
+    baseTiles + syntheticFiles.length,
+  );
+
+  const perfInput = view.contentEl.querySelector('.aob-filters input[type="search"]');
+  const startedAt = Date.now();
+  perfInput.focus();
+  perfInput.value = 'card sintetico 42';
+  perfInput.dispatchEvent(new window.Event('input'));
+  await new Promise((resolve) => window.setTimeout(resolve, 300));
+  const elapsedMs = Date.now() - startedAt;
+  check('busca responde em board maior', elapsedMs < 2000, `${elapsedMs}ms`);
+  const syntheticMatches = view.contentEl.querySelectorAll('.aob-card').length;
+  check('busca filtra no board sintético', syntheticMatches >= 1 && syntheticMatches <= 20, `${syntheticMatches}`);
+  check('busca mantém o foco no board sintético', document.activeElement === perfInput);
+
+  for (const file of syntheticFiles) {
+    vaultData.byPath.delete(file.path);
+    perfFolder.children = perfFolder.children.filter((child) => child !== file);
+  }
+  perfInput.value = '';
+  perfInput.dispatchEvent(new window.Event('input'));
+  await new Promise((resolve) => window.setTimeout(resolve, 300));
+  await view.refresh();
+  equal('board sintético removido', view.contentEl.querySelectorAll('.aob-card').length, baseTiles);
 
   const total = passed + failures.length;
   if (failures.length > 0) {

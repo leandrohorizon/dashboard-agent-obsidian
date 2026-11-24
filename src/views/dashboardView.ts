@@ -55,6 +55,7 @@ declare const require: (id: string) => unknown;
 export const VIEW_TYPE_DASHBOARD = 'aob-dashboard';
 
 const TEMPLATE_PATH = 'templates/card template.md';
+const TEXT_FILTER_DEBOUNCE_MS = 150;
 
 type ViewMode = 'board' | 'list' | 'projects';
 type SinceField = DateField | 'mtime';
@@ -105,6 +106,7 @@ export class DashboardView extends ItemView {
   private selectedPath: string | null = null;
   private activeCardPaths = new Set<string>();
   private refreshHandle: number | null = null;
+  private textFilterHandle: number | null = null;
 
   private filterProject = '';
   private filterFeature = '';
@@ -144,6 +146,7 @@ export class DashboardView extends ItemView {
       window.clearTimeout(this.refreshHandle);
       this.refreshHandle = null;
     }
+    this.cancelTextFilter();
   }
 
   private registerVaultEvents(): void {
@@ -268,6 +271,7 @@ export class DashboardView extends ItemView {
   }
 
   private render(): void {
+    this.cancelTextFilter();
     const root = this.contentEl;
     root.empty();
     this.renderHeader(root);
@@ -292,8 +296,9 @@ export class DashboardView extends ItemView {
 
     this.renderFilters(main);
 
-    if (this.mode === 'board') this.renderKanban(main);
-    else this.renderList(main);
+    const results = main.createDiv({ cls: 'aob-results' });
+    if (this.mode === 'board') this.renderKanban(results);
+    else this.renderList(results);
 
     if (this.selectedPath !== null) {
       const aside = body.createDiv({ cls: 'aob-aside' });
@@ -369,7 +374,7 @@ export class DashboardView extends ItemView {
     text.value = this.filterText;
     text.addEventListener('input', () => {
       this.filterText = text.value;
-      this.renderBodyOnly();
+      this.scheduleTextFilter();
     });
 
     const since = bar.createDiv({ cls: 'aob-since' });
@@ -444,20 +449,33 @@ export class DashboardView extends ItemView {
 
   private renderBodyOnly(): void {
     if (this.scan === null) return;
-    const main = this.contentEl.querySelector('.aob-main');
-    if (!(main instanceof HTMLElement)) {
+    const results = this.contentEl.querySelector('.aob-results');
+    if (!(results instanceof HTMLElement)) {
       this.render();
       return;
     }
-    main.empty();
-    this.renderFilters(main);
-    if (this.mode === 'board') this.renderKanban(main);
-    else this.renderList(main);
+    results.empty();
+    if (this.mode === 'board') this.renderKanban(results);
+    else this.renderList(results);
     const aside = this.contentEl.querySelector('.aob-aside');
     if (aside instanceof HTMLElement) {
       aside.empty();
       this.renderDetail(aside);
     }
+  }
+
+  private scheduleTextFilter(): void {
+    this.cancelTextFilter();
+    this.textFilterHandle = window.setTimeout(() => {
+      this.textFilterHandle = null;
+      this.renderBodyOnly();
+    }, TEXT_FILTER_DEBOUNCE_MS);
+  }
+
+  private cancelTextFilter(): void {
+    if (this.textFilterHandle === null) return;
+    window.clearTimeout(this.textFilterHandle);
+    this.textFilterHandle = null;
   }
 
   private visibleCards(): BoardCard[] {

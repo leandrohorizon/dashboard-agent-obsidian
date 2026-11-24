@@ -126,6 +126,10 @@
   overflow: auto;
 }
 
+.aob-results {
+  display: contents;
+}
+
 .aob-aside {
   flex: 0 0 320px;
   max-width: 40%;
