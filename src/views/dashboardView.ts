@@ -33,7 +33,7 @@ import {
   type BoardScan,
 } from '../board/index';
 import { discoverProjects, type FsProbe, type ProjectEntry, type RegistryResult } from '../projects/registry';
-import { expandHome, isPathInside, normalizeProjectName } from '../shared/paths';
+import { expandHome, isPathInside, normalizeProjectName, toPosix } from '../shared/paths';
 import { repoLeaf } from '../shared/repo';
 import { evaluateAgentState, readCurrentCard } from '../shared/state';
 import {
@@ -755,7 +755,7 @@ export class DashboardView extends ItemView {
       for (const action of actions) {
         const text = substitutePlaceholders(action.text, {
           name: card.basename,
-          path: this.absoluteVaultPath(card.path),
+          path: toPosix(this.absoluteVaultPath(card.path)),
           link: this.obsidianLink(card.path),
           wikilink: `[[${card.basename}]]`,
           pr: card.basename,

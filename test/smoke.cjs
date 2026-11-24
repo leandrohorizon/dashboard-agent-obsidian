@@ -500,6 +500,11 @@ async function main() {
       /^\/(start-card|work-on-card|review-card|complete-card) "/.test(clipboard[0] ?? ''),
       clipboard[0],
     );
+    check(
+      'texto copiado usa o caminho absoluto do card',
+      /^\/work-on-card "[A-Za-z]:\/.*\.md"$/.test(clipboard[0] ?? ''),
+      clipboard[0],
+    );
   }
 
   const copyLabels = [...view.contentEl.querySelectorAll('.aob-copy')].map((button) => button.textContent);
