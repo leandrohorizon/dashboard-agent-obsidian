@@ -598,10 +598,22 @@ async function main() {
   );
 
   const visibleBeforeDelete = view.contentEl.querySelectorAll('.aob-card').length;
-  const inProgressFolder = vaultData.folders.get('board/2.in_progress');
-  const victim = inProgressFolder.children.find((child) => child.path.endsWith('.md'));
+  const firstCardUnder = (folderPath) => {
+    const folder = vaultData.folders.get(folderPath);
+    const direct = folder.children.find((child) => child.path.endsWith('.md'));
+    if (direct) return { folder, file: direct };
+    for (const child of folder.children) {
+      if (!Array.isArray(child.children)) continue;
+      const nested = firstCardUnder(child.path);
+      if (nested) return nested;
+    }
+    return null;
+  };
+  const victimEntry = firstCardUnder('board/2.in_progress');
+  check('harness encontra card em 2.in_progress', victimEntry !== null);
+  const victim = victimEntry.file;
   vaultData.byPath.delete(victim.path);
-  inProgressFolder.children = inProgressFolder.children.filter((child) => child.path !== victim.path);
+  victimEntry.folder.children = victimEntry.folder.children.filter((child) => child.path !== victim.path);
   vault.emit('delete', { path: victim.path });
   await new Promise((resolve) => window.setTimeout(resolve, 800));
   equal(
@@ -629,7 +641,7 @@ async function main() {
   );
   const createdFile = new TFile(createdPath, { mtime: Date.now(), ctime: 0, size: 10, type: 'file' });
   vaultData.byPath.set(createdPath, createdFile);
-  inProgressFolder.children.push(createdFile);
+  vaultData.folders.get('board/2.in_progress').children.push(createdFile);
   vault.emit('create', createdFile);
   await new Promise((resolve) => window.setTimeout(resolve, 800));
   equal(
