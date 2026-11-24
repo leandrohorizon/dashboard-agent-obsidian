@@ -797,7 +797,13 @@ export class DashboardView extends ItemView {
     const status = this.projectForCard(card);
 
     if (card.repo === null) return { status, blocker: 'card sem `repo:`: não há projeto para ativar' };
-    if (status === null) return { status, blocker: 'projeto do card não está entre os registrados' };
+    if (status === null) {
+      return {
+        status,
+        blocker:
+          'projeto do card não está entre os registrados: a pasta precisa ter `.agent_obsidian` (rode /init-agent-state nela) e o nome da pasta precisa casar com o repositório',
+      };
+    }
     if (status.snapshot === null) return { status, blocker: 'projeto sem `.agent_obsidian`' };
     if (status.verdict === 'blocked') return { status, blocker: status.message };
     if (status.verdict === 'repair') return { status, blocker: 'o state precisa de reparo antes de ativar' };
